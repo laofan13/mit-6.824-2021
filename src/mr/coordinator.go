@@ -27,6 +27,7 @@ type Coordinator struct {
 
 func (c *Coordinator) CallTask(args *TaskArgs, reply *TaskReply) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	reply.NMapTaks = c.nMapTasks
 	reply.NReduceTasks = c.nReduceTasks
@@ -92,6 +93,7 @@ func (c *Coordinator) CallTask(args *TaskArgs, reply *TaskReply) error {
 //
 func (c *Coordinator) DoneTask(args *DoneTaskRrgs, reply *DoneTaskReply) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	switch args.TaskType {
 	case Map:
