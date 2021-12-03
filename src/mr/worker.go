@@ -1,19 +1,17 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
-import "os"
-import "time"
-import "encoding/gob"
-import "encoding/json"
-import "io/ioutil"
-import "path/filepath"
-import "strconv"
-import "sort"
-
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -25,10 +23,12 @@ type KeyValue struct {
 
 // for sorting by key.
 type ByKey []KeyValue
+
 // for sorting by key.
 func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
 //
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -39,57 +39,58 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 //
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	gob.Register(Task{})
+
 	// // Your worker implementation here.
 	for {
-		reply := CallTask()
-		switch reply.State {
-			case 0:
-				MapWorker(mapf,reply)
-			case 1:
-				ReduceWorker(reducef,reply)
-			case 2:
-				time.Sleep(time.Duration(time.Second * 5))
-				break
-			case 3:
-				fmt.Println("Master all tasks complete. Nothing to do...")
-				// exit worker process
-				return
-			default:
-				panic("Invalid Task state received by worker")
+		args := TaskArgs{}
+		// declare a reply structure.
+		reply := TaskReply{}
+
+		// send the RPC request, wait for the reply.
+		call("Coordinator.CallTask", &args, &reply)
+		switch reply.TaskType {
+		case Map:
+			MapWorker(reply.NumTask, reply.MapFIle, reply.NReduceTasks, mapf)
+		case Reduce:
+			ReduceWorker(reply.NumTask, reply.NMapTaks, reducef)
+		case Done:
+			os.Exit(0)
+		default:
+			fmt.Errorf("Bad taks type %d", reply.TaskType)
 		}
+
+		doneArgs := DoneTaskRrgs{
+			TaskType: reply.TaskType,
+			NumTask:  reply.NumTask,
+		}
+		doneReply := DoneTaskReply{}
+		call("Coordinator.DoneTask", &doneArgs, &doneReply)
+
 	}
 }
 
-
-/* 
+/*
 	执行map任务
 */
-func MapWorker(mapf func(string, string) []KeyValue,reply *ReplyTask) {
-	task := (reply.Ele.Value).(Task)
-	fileName := task.InputFIleName
-	nReduce := task.NReduce
-	fmt.Println("%vth map task run suceessfully",task.MapIndex)
+func MapWorker(numTask int, mapFIle string, nReduce int, mapf func(string, string) []KeyValue) {
+	fmt.Println("%vth map task run suceessfully", numTask)
 
 	//获取键值对
-	intermediate := []KeyValue{}
-	file,err := os.Open(fileName);
+	file, err := os.Open(mapFIle)
 	if err != nil {
-		log.Fatalf("cannot open %v", fileName)
+		log.Fatalf("cannot open %v", mapFIle)
 	}
 	content, err := ioutil.ReadAll(file)
 	if err != nil {
-		log.Fatalf("cannot read %v", fileName)
+		log.Fatalf("cannot read %v", mapFIle)
 	}
 	file.Close()
-	kva := mapf(fileName, string(content))
-	intermediate = append(intermediate, kva...)
+	kva := mapf(mapFIle, string(content))
 
 	//创建临时文件
 	outFiles := make([]*os.File, nReduce)
@@ -101,42 +102,38 @@ func MapWorker(mapf func(string, string) []KeyValue,reply *ReplyTask) {
 		fileEncs[outindex] = json.NewEncoder(outFiles[outindex])
 	}
 	//编码
-	for _, kv := range intermediate {
+	for _, kv := range kva {
 		outindex := ihash(kv.Key) % nReduce
 		enc := fileEncs[outindex]
 		enc.Encode(&kv)
 		if err != nil {
 			fmt.Println("编码错误", err.Error())
-		   	panic("Json encode failed")
+			panic("Json encode failed")
 		}
-	 }
+	}
 
-	 //更名
-	 outprefix := "mr-" + strconv.Itoa(task.MapIndex) + "-"
-	 for outindex, file := range outFiles {
+	//更名
+	outprefix := "mr-" + strconv.Itoa(numTask) + "-"
+	for outindex, file := range outFiles {
 		outname := outprefix + strconv.Itoa(outindex)
 		oldpath := filepath.Join(file.Name())
 		//fmt.Printf("temp file oldpath %v\n", oldpath)
 		os.Rename(oldpath, outname)
 		file.Close()
-	 }
-
-	 DoneTask(reply)
+	}
 }
 
-
-/* 
+/*
 	执行reduce任务
 */
-func ReduceWorker(reducef func(string, []string) string,reply *ReplyTask) {
-	task := (reply.Ele.Value).(Task)
-	fmt.Println("%vth reduce task run suceessfully",task.PartIndex)
+func ReduceWorker(numTask int, nMap int, reducef func(string, []string) string) {
+	fmt.Println("%vth reduce task run suceessfully", numTask)
 	filePrefix := "mr-"
-	fileSuffix := "-" + strconv.Itoa(task.PartIndex)
+	fileSuffix := "-" + strconv.Itoa(numTask)
 
 	//获取键值对
 	intermediate := []KeyValue{}
-	for i := 0; i < task.NMap;i++ {
+	for i := 0; i < nMap; i++ {
 		fileName := filePrefix + strconv.Itoa(i) + fileSuffix
 		file, err := os.Open(fileName)
 		if err != nil {
@@ -144,18 +141,18 @@ func ReduceWorker(reducef func(string, []string) string,reply *ReplyTask) {
 		}
 		dec := json.NewDecoder(file)
 		for {
-		  var kv KeyValue
-		  if err := dec.Decode(&kv); err != nil {
-			break
-		  }
-		  intermediate = append(intermediate, kv)
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			intermediate = append(intermediate, kv)
 		}
 		file.Close()
 	}
-	
+
 	sort.Sort(ByKey(intermediate))
 
-	oname := "mr-out-" + strconv.Itoa(task.PartIndex)
+	oname := "mr-out-" + strconv.Itoa(numTask)
 	ofile, _ := os.Create(oname)
 
 	//
@@ -180,28 +177,6 @@ func ReduceWorker(reducef func(string, []string) string,reply *ReplyTask) {
 		i = j
 	}
 	ofile.Close()
-
-	DoneTask(reply)
-}
-
-func CallTask() *ReplyTask{
-	// declare an argument structure.
-	args := ExampleArgs{}
-	// declare a reply structure.
-	reply := ReplyTask{}
-
-	// send the RPC request, wait for the reply.
-	call("Coordinator.CallTask", &args, &reply)
-
-	return &reply;
-}
-
-func DoneTask(args* ReplyTask){
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	call("Coordinator.DoneTask", args, &reply)
 }
 
 //
@@ -234,8 +209,8 @@ func CallExample() {
 //
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := coordinatorSock()
-	c, err := rpc.DialHTTP("unix", sockname)
+	// sockname := coordinatorSock()
+	c, err := rpc.DialHTTP("tcp", "127.0.0.1:8095")
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}
