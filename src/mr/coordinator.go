@@ -13,6 +13,8 @@ type Coordinator struct {
 	// Your definitions here.
 	mu sync.Mutex
 
+	cond sync.Cond
+
 	mapFIles     []string
 	nMapTasks    int
 	nReduceTasks int
@@ -49,7 +51,7 @@ func (c *Coordinator) CallTask(args *TaskArgs, reply *TaskReply) error {
 			}
 		}
 		if !mapDone {
-
+			c.cond.Wait()
 		} else {
 			break
 		}
@@ -72,7 +74,7 @@ func (c *Coordinator) CallTask(args *TaskArgs, reply *TaskReply) error {
 		}
 
 		if !redDone {
-
+			c.cond.Wait()
 		} else {
 			break
 		}
@@ -103,6 +105,8 @@ func (c *Coordinator) DoneTask(args *DoneTaskRrgs, reply *DoneTaskReply) error {
 	default:
 		log.Fatalf("bad finshed task? %d", args.NumTask)
 	}
+
+	c.cond.Broadcast()
 
 	return nil
 }
@@ -144,6 +148,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	c.mu = sync.Mutex{}
 
+	c.cond = *sync.NewCond(&c.mu)
+
 	c.mapFIles = files
 	c.nMapTasks = len(files)
 	c.nReduceTasks = nReduce
@@ -154,6 +160,15 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.reduceTaskIssued = make([]time.Time, nReduce)
 
 	c.isDone = false
+
+	go func() {
+		for {
+			c.mu.Lock()
+			c.cond.Broadcast()
+			c.mu.Unlock()
+			time.Sleep(time.Second)
+		}
+	}()
 
 	c.server()
 	return &c
