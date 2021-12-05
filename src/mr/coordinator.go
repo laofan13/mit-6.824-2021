@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
+	"os"
 	"sync"
 	"time"
 )
@@ -12,6 +13,8 @@ import (
 type Coordinator struct {
 	// Your definitions here.
 	mu sync.Mutex
+
+	cond *sync.Cond
 
 	mapFIles     []string
 	nMapTasks    int
@@ -49,7 +52,7 @@ func (c *Coordinator) CallTask(args *TaskArgs, reply *TaskReply) error {
 			}
 		}
 		if !mapDone {
-
+			c.cond.Wait()
 		} else {
 			break
 		}
@@ -72,7 +75,7 @@ func (c *Coordinator) CallTask(args *TaskArgs, reply *TaskReply) error {
 		}
 
 		if !redDone {
-
+			c.cond.Wait()
 		} else {
 			break
 		}
@@ -104,6 +107,8 @@ func (c *Coordinator) DoneTask(args *DoneTaskRrgs, reply *DoneTaskReply) error {
 		log.Fatalf("bad finshed task? %d", args.NumTask)
 	}
 
+	c.cond.Broadcast()
+
 	return nil
 }
 
@@ -114,10 +119,9 @@ func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
 	//l, e := net.Listen("tcp", ":1234")
-	// sockname := coordinatorSock()
-	// os.Remove(sockname)
-	// l, e := net.Listen("unix", sockname)
-	l, e := net.Listen("tcp", "127.0.0.1:8095")
+	sockname := coordinatorSock()
+	os.Remove(sockname)
+	l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
@@ -143,6 +147,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	c.mu = sync.Mutex{}
+	c.cond = sync.NewCond(&c.mu)
 
 	c.mapFIles = files
 	c.nMapTasks = len(files)
@@ -154,6 +159,15 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.reduceTaskIssued = make([]time.Time, nReduce)
 
 	c.isDone = false
+
+	go func() {
+		for {
+			c.mu.Lock()
+			c.cond.Broadcast()
+			c.mu.Unlock()
+			time.Sleep(time.Second)
+		}
+	}()
 
 	c.server()
 	return &c
