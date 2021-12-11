@@ -283,12 +283,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply
 		rf.currentTerm, rf.votedFor = args.Term, -1
 	}
 	rf.state = Follower
-
 	reply.Term, reply.Success = rf.currentTerm, true
-
-	DPrintf("{Node %v} Send a {AppendEntriesResponse: %v} to {Node %v} with term %v\n", rf.me, reply, args.LeaderId, args.Term)
-
 	rf.electionTimer.Reset(RandElectionTimeout())
+	DPrintf("{Node %v} Send a {AppendEntriesResponse: %v} to {Node %v} with term %v\n", rf.me, reply, args.LeaderId, args.Term)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesAags, reply *AppendEntriesReply) bool {
