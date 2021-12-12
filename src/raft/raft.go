@@ -422,10 +422,12 @@ func (rf *Raft) ticker() {
 			rf.mu.Unlock()
 		case <-rf.electionTimer.C:
 			rf.mu.Lock()
-			rf.currentTerm += 1
-			rf.state = Candidater
-			rf.StartSelection()
-			rf.electionTimer.Reset(RandElectionTimeout())
+			if rf.state != Leader {
+				rf.currentTerm += 1
+				rf.state = Candidater
+				rf.StartSelection()
+				rf.electionTimer.Reset(RandElectionTimeout())
+			}
 			rf.mu.Unlock()
 		}
 	}
@@ -476,10 +478,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 }
 
 func RandElectionTimeout() time.Duration {
-	i := rand.Int31n(5)
-	return time.Millisecond * time.Duration(i*30+150)
+	i := rand.Int31n(150)
+	return time.Millisecond * time.Duration(i+150)
 }
 
 func RandHeartTimeout() time.Duration {
-	return time.Millisecond * 150
+	i := rand.Int31n(50)
+	return time.Millisecond * time.Duration(i+100)
 }
