@@ -65,9 +65,8 @@ const (
 //log entry
 
 type Entry struct {
-	LogTerm  int
-	LogIndex int
-	Command  interface{}
+	LogTerm int
+	Command interface{}
 }
 
 //
@@ -84,13 +83,12 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	// 2A
 	applyCh chan ApplyMsg
 	state   NodeState
 
 	currentTerm int
 	votedFor    int
-	log         []Entry
+	logs        []Entry
 
 	commitIndex int
 	lastApplied int
@@ -205,20 +203,33 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	DPrintf("{Node: %v} receives a new {VoteRequest: %v} from {CandidateId Node: %v} with term %v \n", rf.me, args, args.CandidateId, args.Term)
 
+	// 1. 如果`term < currentTerm`返回 false （5.2 节）
+	// 2. 如果 votedFor 为空或者为 candidateId，并且候选人的日志至少和自己一样新，那么就投票给他
 	if rf.currentTerm > args.Term || (rf.currentTerm == args.Term && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
 		reply.Term, reply.VoteGranted = rf.currentTerm, false
-		DPrintf("{Node %v} send a VoteResponse %v} to {Node %v} with term %v\n", rf.me, reply, args.CandidateId, rf.currentTerm)
+		DPrintf("{Node %v} Voted against {CandidateId Node: %v} with term %v \n", rf.me, args.CandidateId, rf.currentTerm)
 		return
 	}
+
+	//如果投票人的日志是否比候选人更新，则投反对票
+	lastLogTerm := 0
+	if len(rf.logs) != 0 {
+		lastLogTerm = rf.logs[len(rf.logs)-1].LogTerm
+	}
+	if lastLogTerm > args.LastLogTerm || (lastLogTerm == args.Term && (len(rf.logs)-1) > args.LastLogIndex) {
+		reply.Term, reply.VoteGranted = rf.currentTerm, false
+		DPrintf("The log of {Node %v} is newer than that of {CandidateId Node: %v} with term %v \n", rf.me, args.CandidateId, rf.currentTerm)
+		return
+	}
+
 	if rf.currentTerm < args.Term {
 		rf.state = Follower
 		rf.currentTerm, rf.votedFor = args.Term, -1
 	}
-
 	rf.votedFor = args.CandidateId
 	reply.Term, reply.VoteGranted = rf.currentTerm, true
 	rf.electionTimer.Reset(RandElectionTimeout())
-	DPrintf("{Node %v} Send a VoteResponse %v} to {Node %v} with term %v\n", rf.me, reply, args.CandidateId, rf.currentTerm)
+	DPrintf("{Node %v} Voted for {Node %v} with term %v\n", rf.me, args.CandidateId, rf.currentTerm)
 }
 
 //
@@ -308,13 +319,60 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesAags, reply *Ap
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	index := len(rf.logs)
+	term := rf.currentTerm
+	isLeader := rf.state == Leader
 
 	// Your code here (2B).
+	e := Entry{
+		LogTerm: term,
+		Command: command,
+	}
+	if isLeader {
+		rf.logs = append(rf.logs, e)
+		go rf.ProcessLog(e)
+	}
 
 	return index, term, isLeader
+}
+
+func (rf *Raft) ProcessLog(entry Entry) {
+	args := AppendEntriesAags{
+		Term:         rf.currentTerm,
+		LeaderId:     rf.me,
+		Entries:      []Entry{entry},
+		LeaderCommit: rf.commitIndex,
+	}
+
+	count := 0
+	for peer, _ := range rf.peers {
+		if rf.me != peer && !rf.killed() {
+			go func(peer int) {
+				args.PrevLogIndex, args.PrevLogTerm = rf.nextIndex[peer]-1, 0
+				if args.PrevLogIndex != -1 {
+					args.PrevLogTerm = rf.logs[args.PrevLogIndex].LogTerm
+				}
+				reply := AppendEntriesReply{}
+
+				if rf.sendAppendEntries(peer, &args, &reply) {
+					rf.mu.Lock()
+					defer rf.mu.Unlock()
+
+					if rf.state == Leader && rf.currentTerm == args.Term {
+						if reply.Success {
+							count++
+						} else {
+
+						}
+					}
+				}
+
+			}(peer)
+		}
+	}
 }
 
 //
@@ -366,14 +424,24 @@ func (rf *Raft) StartBroadCastHeart() {
 }
 
 func (rf *Raft) StartSelection() {
+	rf.mu.Lock()
 	DPrintf("{Node %v} starts election in %v term\n", rf.me, rf.currentTerm)
-	args := RequestVoteArgs{
-		Term:        rf.currentTerm,
-		CandidateId: rf.me,
-	}
+	rf.currentTerm += 1
+	rf.state = Candidater
 	rf.votedFor = rf.me
-	vote := 1
+	var lastLogTerm int = 0
+	if len(rf.logs) != 0 {
+		lastLogTerm = rf.logs[len(rf.logs)-1].LogTerm
+	}
+	args := RequestVoteArgs{
+		Term:         rf.currentTerm,
+		CandidateId:  rf.me,
+		LastLogIndex: len(rf.logs) - 1,
+		LastLogTerm:  lastLogTerm,
+	}
+	rf.mu.Unlock()
 
+	vote := 1
 	for i := range rf.peers {
 		if rf.me != i {
 			go func(peer int) {
@@ -381,16 +449,20 @@ func (rf *Raft) StartSelection() {
 				if rf.sendRequestVote(peer, &args, &reply) {
 					rf.mu.Lock()
 					defer rf.mu.Unlock()
-
 					if rf.currentTerm == args.Term && rf.state == Candidater {
 						if reply.VoteGranted {
-							DPrintf("{Node %v} receives a new vote from {Node %v} with term %v\n", rf.me, peer, args.Term)
+							DPrintf("{Node %v} get a vote from {Node %v} with term %v\n", rf.me, peer, args.Term)
 							vote++
 							if vote > len(rf.peers)/2 {
 								DPrintf("{Node %v} Win elect in term %v\n", rf.me, rf.currentTerm)
 								rf.state = Leader
 								rf.StartBroadCastHeart()
 								rf.heartTimer.Reset(RandHeartTimeout())
+
+								//初始化所有的 nextIndex 值为自己的最后一条日志的 index 加1
+								for i, _ := range rf.nextIndex {
+									rf.nextIndex[i] = len(rf.logs)
+								}
 							}
 
 						} else if reply.Term > rf.currentTerm {
@@ -423,12 +495,13 @@ func (rf *Raft) ticker() {
 		case <-rf.electionTimer.C:
 			rf.mu.Lock()
 			if rf.state != Leader {
-				rf.currentTerm += 1
-				rf.state = Candidater
+				rf.mu.Unlock()
 				rf.StartSelection()
 				rf.electionTimer.Reset(RandElectionTimeout())
+			} else {
+				rf.mu.Unlock()
 			}
-			rf.mu.Unlock()
+
 		}
 	}
 }
@@ -460,10 +533,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.votedFor = -1
 
-	// rf.log = make([]Entry, 1)
-	// rf.commitIndex = 0
-	// rf.nextIndex = make([]int, len(peers))
-	// rf.matchIndex = make([]int, len(peers))
+	rf.logs = []Entry{}
+	rf.commitIndex = -1
+	rf.lastApplied = -1
+	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
 
 	rf.electionTimer = time.NewTimer(RandHeartTimeout())
 	rf.heartTimer = time.NewTimer(RandElectionTimeout())
@@ -478,8 +552,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 }
 
 func RandElectionTimeout() time.Duration {
-	i := rand.Int31n(150)
-	return time.Millisecond * time.Duration(i+150)
+	i := rand.Int31n(300)
+	return time.Millisecond * time.Duration(i+200)
 }
 
 func RandHeartTimeout() time.Duration {
