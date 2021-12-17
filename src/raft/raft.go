@@ -286,16 +286,42 @@ func (rf *Raft) AppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 	DPrintf("{Node %v} receives a new {AppendEntriesRequest: %v}from {Node %v} with term %v\n", rf.me, args, args.LeaderId, args.Term)
 
+	reply.Term = rf.currentTerm
 	if rf.currentTerm > args.Term {
-		reply.Term, reply.Success = rf.currentTerm, false
+		reply.Success = false
 		return
-	}
-	if rf.currentTerm < args.Term {
+	} else if rf.currentTerm < args.Term {
 		rf.currentTerm, rf.votedFor = args.Term, -1
 	}
 	rf.state = Follower
-	reply.Term, reply.Success = rf.currentTerm, true
-	rf.electionTimer.Reset(RandElectionTimeout())
+
+	//为空则为心跳
+	if args.Entries == nil {
+		reply.Term, reply.Success = rf.currentTerm, true
+		rf.electionTimer.Reset(RandElectionTimeout())
+		return
+	}
+
+	//插入日志
+	if args.PrevLogIndex < len(rf.logs) {
+		//如果是第一条日志
+		if args.PrevLogIndex == -1 || rf.logs[args.PrevLogIndex].LogTerm == args.PrevLogTerm {
+			reply.Success = true
+			rf.logs = append(rf.logs[:args.PrevLogIndex+1], args.Entries...)
+
+			lastLogIndex := args.Entries[len(args.Entries)-1].LogTerm
+			if args.LeaderCommit > lastLogIndex {
+				rf.commitIndex = lastLogIndex
+			} else {
+				rf.commitIndex = args.LeaderCommit
+			}
+		} else {
+			reply.Success = false
+			rf.logs = rf.logs[:args.PrevLogIndex]
+		}
+	} else {
+		reply.Success = false
+	}
 	DPrintf("{Node %v} Send a {AppendEntriesResponse: %v} to {Node %v} with term %v\n", rf.me, reply, args.LeaderId, args.Term)
 }
 
@@ -333,43 +359,61 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	if isLeader {
 		rf.logs = append(rf.logs, e)
-		go rf.ProcessLog(e)
+		go rf.ProcessLog(e, index)
 	}
 
 	return index, term, isLeader
 }
 
-func (rf *Raft) ProcessLog(entry Entry) {
+func (rf *Raft) ProcessLog(entry Entry, lastIndex int) {
+	DPrintf("{Node %v} send a AppendEntries{Log: %v} with term %v\n", rf.me, entry, rf.currentTerm)
 	args := AppendEntriesAags{
 		Term:         rf.currentTerm,
 		LeaderId:     rf.me,
-		Entries:      []Entry{entry},
 		LeaderCommit: rf.commitIndex,
 	}
 
-	count := 0
+	vote := 1
 	for peer, _ := range rf.peers {
 		if rf.me != peer && !rf.killed() {
 			go func(peer int) {
-				args.PrevLogIndex, args.PrevLogTerm = rf.nextIndex[peer]-1, 0
-				if args.PrevLogIndex != -1 {
-					args.PrevLogTerm = rf.logs[args.PrevLogIndex].LogTerm
-				}
+				DPrintf("{Node %v} send a AppendEntries{Log: %v} to {Node %v} with term %v\n", rf.me, entry, peer, args.Term)
+
 				reply := AppendEntriesReply{}
+				for { //一直循环 直到插入成功
+					args.PrevLogIndex, args.PrevLogTerm = rf.nextIndex[peer]-1, 0
+					args.Entries = rf.logs[args.PrevLogIndex+1 : lastIndex+1]
+					if args.PrevLogIndex != -1 {
+						args.PrevLogTerm = rf.logs[args.PrevLogIndex].LogTerm
+					}
+					if rf.sendAppendEntries(peer, &args, &reply) {
+						rf.mu.Lock()
+						defer rf.mu.Unlock()
 
-				if rf.sendAppendEntries(peer, &args, &reply) {
-					rf.mu.Lock()
-					defer rf.mu.Unlock()
+						if rf.state == Leader && rf.currentTerm == args.Term {
+							if reply.Success {
+								vote++
+								rf.nextIndex[peer] = lastIndex + 1
 
-					if rf.state == Leader && rf.currentTerm == args.Term {
-						if reply.Success {
-							count++
+								if vote > len(rf.logs)/2 {
+
+								}
+
+								break
+							} else if args.Term < reply.Term {
+								DPrintf("The term of {Node %v} is shorter than that of {Node %v} with %v term\n", rf.me, peer, args.Term)
+								rf.state, rf.currentTerm, rf.votedFor = Follower, reply.Term, -1
+								rf.electionTimer.Reset(RandElectionTimeout())
+								break
+							} else {
+								rf.nextIndex[peer]--
+							}
 						} else {
-
+							break
 						}
 					}
+					time.Sleep(10 * time.Millisecond)
 				}
-
 			}(peer)
 		}
 	}
