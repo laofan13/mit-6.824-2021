@@ -20,6 +20,7 @@ package raft
 import (
 	//	"bytes"
 
+	"fmt"
 	"math/rand"
 	"sort"
 	"sync"
@@ -374,7 +375,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply
 	}
 
 	if len(args.Entries) != 0 {
-		rf.logs = append(rf.logs[:args.PrevLogIndex-rf.getFirstLogIndex()], args.Entries...)
+		if args.PrevLogIndex == 0 {
+			rf.logs = append(rf.logs[:args.PrevLogIndex-rf.getFirstLogIndex()], args.Entries...)
+		} else {
+			rf.logs = append(rf.logs[:args.PrevLogIndex-rf.getFirstLogIndex()+1], args.Entries...)
+		}
 	}
 
 	newCommitIndex := rf.getLastLogIndex()
@@ -385,6 +390,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply
 		rf.commitIndex = newCommitIndex
 		rf.applyCond.Signal()
 	}
+
+	fmt.Printf("{Node %v} logs = {%+v}\n", rf.me, rf.logs)
 
 	reply.Success = true
 	DPrintf("{Node %v} Send a {AppendEntriesResponse: %v} to {Node %v} with term %v\n", rf.me, reply, args.LeaderId, args.Term)
@@ -413,33 +420,38 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	index := len(rf.logs)
+	index := rf.getLastLogIndex() + 1
 	term := rf.currentTerm
 	isLeader := rf.state == Leader
 
 	// Your code here (2B).
 	e := Entry{
-		Index:   rf.getLastLogIndex() + 1,
+		Index:   index,
 		Term:    term,
 		Command: command,
 	}
 	if isLeader {
-		rf.logs = append(rf.logs, e)
-		go rf.ProcessLog(e)
+		rf.AppendLog(e)
+		go rf.ProcessLog()
 	}
 
 	return index, term, isLeader
 }
 
-func (rf *Raft) ProcessLog(entry Entry) {
-	DPrintf("{Node %v} send a AppendEntries{Log: %v} with term %v\n", rf.me, entry, rf.currentTerm)
+func (rf *Raft) AppendLog(entry Entry) {
+	fmt.Printf("{Node %v} receive a {Command %+v} from client\n", rf.me, entry)
+	rf.nextIndex[rf.me] = entry.Index + 1
+	rf.matchIndex[rf.me] = entry.Index
+	rf.logs = append(rf.logs, entry)
+}
 
+func (rf *Raft) ProcessLog() {
 	for i, _ := range rf.peers {
 		if rf.me != i && !rf.killed() {
 			go func(peer int) {
 				args := rf.makeAppendEntriesAags(peer)
 				reply := AppendEntriesReply{}
-				DPrintf("{Node %v} send a AppendEntries{Log: %v} to {Node %v} with term %v\n", rf.me, entry, peer, args.Term)
+				fmt.Printf("{Node %v} send a {AppendEntries: %+v} to {Node %v} with term %v\n", rf.me, args, peer, args.Term)
 				if rf.sendAppendEntries(peer, &args, &reply) {
 					rf.mu.Lock()
 					rf.handleAppendEntries(peer, &args, &reply)
@@ -451,11 +463,14 @@ func (rf *Raft) ProcessLog(entry Entry) {
 }
 
 func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *AppendEntriesReply) {
+	fmt.Printf("{Node %v} receive {reply: %+v} after send a {args: %+v} with term %v\n", rf.me, reply, args, args.Term)
 	if rf.state == Leader && rf.currentTerm == args.Term {
 		if reply.Success {
 			if len(args.Entries) != 0 {
+				// fmt.Printf("{Node %v} append sucessfully with term %v", peer, args.Term)
 				rf.nextIndex[peer] = args.Entries[len(args.Entries)-1].Index + 1
 				rf.matchIndex[peer] = rf.nextIndex[peer] - 1
+				fmt.Printf("{leader %v} update {nextIndex %v } and {matchIndex %v } in {Node %v}\n", rf.me, rf.nextIndex[peer], rf.matchIndex[peer], peer)
 				rf.updateCommitIndex()
 			}
 		} else {
@@ -474,9 +489,8 @@ func (rf *Raft) updateCommitIndex() {
 	n := len(rf.matchIndex)
 	srt := make([]int, n)
 	copy(srt, rf.matchIndex)
-	sort.Slice(srt, func(i, j int) bool {
-		return i < j
-	})
+	sort.Ints(srt)
+	fmt.Printf("%v\n", srt)
 	newCommitIndex := srt[n-(n/2+1)]
 
 	if newCommitIndex > rf.commitIndex {
