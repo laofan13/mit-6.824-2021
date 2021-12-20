@@ -255,19 +255,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term, reply.VoteGranted = rf.currentTerm, false
 		DPrintf("{Node %v} Voted against {CandidateId Node: %v} with term %v \n", rf.me, args.CandidateId, rf.currentTerm)
 		return
+	} else if rf.currentTerm < args.Term {
+		rf.state = Follower
+		rf.currentTerm, rf.votedFor = args.Term, -1
 	}
-
 	//如果投票人的日志是否比候选人更新，则投反对票
 	lastLogTerm := rf.getLastLogTerm()
-	if lastLogTerm > args.LastLogTerm || (lastLogTerm == args.Term && rf.getLastLogIndex() > args.LastLogIndex) {
+	if lastLogTerm > args.LastLogTerm || (lastLogTerm == args.LastLogTerm && rf.getLastLogIndex() > args.LastLogIndex) {
 		reply.Term, reply.VoteGranted = rf.currentTerm, false
 		DPrintf("The log of {Node %v} is newer than that of {CandidateId Node: %v} with term %v \n", rf.me, args.CandidateId, rf.currentTerm)
 		return
-	}
-
-	if rf.currentTerm < args.Term {
-		rf.state = Follower
-		rf.currentTerm, rf.votedFor = args.Term, -1
 	}
 
 	rf.votedFor = args.CandidateId
@@ -355,7 +352,7 @@ func (rf *Raft) makeAppendEntriesAags(peer int) AppendEntriesAags {
 func (rf *Raft) AppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("{Node %v} receives a new {AppendEntriesRequest: %v}from {Node %v} with term %v\n", rf.me, args, args.LeaderId, args.Term)
+	DPrintf("{Leader %v} receives a new {AppendEntriesRequest: %v}from {Node %v} with term %v\n", rf.me, args, args.LeaderId, args.Term)
 
 	reply.Term = rf.currentTerm
 	if rf.currentTerm > args.Term {
@@ -368,15 +365,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply
 	rf.electionTimer.Reset(RandElectionTimeout())
 
 	//日志冲突
-	if args.PrevLogIndex < rf.getFirstLogIndex() || args.PrevLogIndex > rf.getLastLogIndex() ||
-		(args.PrevLogIndex != 0 && rf.logs[args.PrevLogIndex-rf.getFirstLogIndex()].Term != args.PrevLogTerm) {
+	if args.PrevLogIndex != 0 && (args.PrevLogIndex > rf.getLastLogIndex() ||
+		args.PrevLogIndex < rf.getFirstLogIndex() ||
+		rf.logs[args.PrevLogIndex-rf.getFirstLogIndex()].Term != args.PrevLogTerm) {
 		reply.Success = false
 		return
 	}
 
 	if len(args.Entries) != 0 {
 		if args.PrevLogIndex == 0 {
-			rf.logs = append(rf.logs[:args.PrevLogIndex-rf.getFirstLogIndex()], args.Entries...)
+			rf.logs = args.Entries
 		} else {
 			rf.logs = append(rf.logs[:args.PrevLogIndex-rf.getFirstLogIndex()+1], args.Entries...)
 		}
@@ -449,7 +447,9 @@ func (rf *Raft) ProcessLog() {
 	for i, _ := range rf.peers {
 		if rf.me != i && !rf.killed() {
 			go func(peer int) {
+				rf.mu.Lock()
 				args := rf.makeAppendEntriesAags(peer)
+				rf.mu.Unlock()
 				reply := AppendEntriesReply{}
 				fmt.Printf("{Node %v} send a {AppendEntries: %+v} to {Node %v} with term %v\n", rf.me, args, peer, args.Term)
 				if rf.sendAppendEntries(peer, &args, &reply) {
@@ -463,7 +463,7 @@ func (rf *Raft) ProcessLog() {
 }
 
 func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *AppendEntriesReply) {
-	fmt.Printf("{Node %v} receive {reply: %+v} after send a {args: %+v} with term %v\n", rf.me, reply, args, args.Term)
+	fmt.Printf("{Leader %v} receive {reply: %+v} after send a {args: %+v} with term %v\n", rf.me, reply, args, args.Term)
 	if rf.state == Leader && rf.currentTerm == args.Term {
 		if reply.Success {
 			if len(args.Entries) != 0 {
@@ -479,7 +479,9 @@ func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *Ap
 				rf.state, rf.currentTerm, rf.votedFor = Follower, reply.Term, -1
 				rf.electionTimer.Reset(RandElectionTimeout())
 			} else {
-				rf.nextIndex[peer]--
+				if rf.nextIndex[peer] > 1 {
+					rf.nextIndex[peer]--
+				}
 			}
 		}
 	}
@@ -495,6 +497,7 @@ func (rf *Raft) updateCommitIndex() {
 
 	if newCommitIndex > rf.commitIndex {
 		if rf.logs[newCommitIndex-rf.getFirstLogIndex()].Term == rf.currentTerm {
+			fmt.Printf("{Leader %v} update CommitIndex %v\n", rf.me, newCommitIndex)
 			rf.commitIndex = newCommitIndex
 			rf.applyCond.Signal()
 		}
@@ -573,7 +576,7 @@ func (rf *Raft) handleRequestVote(vote *int, peer int, args *RequestVoteArgs, re
 			DPrintf("{Node %v} get a vote from {Node %v} with term %v\n", rf.me, peer, args.Term)
 			*vote++
 			if *vote > len(rf.peers)/2 {
-				DPrintf("{Node %v} Win elect in term %v\n", rf.me, rf.currentTerm)
+				fmt.Printf("{Node %v} Win elect in term %v\n", rf.me, rf.currentTerm)
 				rf.state = Leader
 				rf.StartBroadCastHeart()
 				rf.heartTimer.Reset(RandHeartTimeout())
