@@ -1,9 +1,22 @@
 package raft
 
-import "log"
+import (
+	"log"
+	"os"
+)
 
 // Debugging
 const Debug = true
+
+func init() {
+	logFile, err := os.OpenFile("log.txt", os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		panic(err)
+	}
+	logFile.Truncate(0)
+	log.SetOutput(logFile)
+
+}
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -44,6 +57,15 @@ func (l *Log) append(e Entry) {
 
 func (l *Log) AppendLogs(startIndex int, logs []Entry) {
 	l.logs = append(l.logs[:startIndex+1-l.firstIndex()], logs...)
+}
+
+func (l *Log) preCuted(preIndex int) {
+	l.logs = l.logs[:preIndex-l.firstIndex()+1]
+}
+
+func (l *Log) nextCuted(nextIndex int) {
+	l.startIndex += nextIndex
+	l.logs = l.logs[nextIndex-l.firstIndex():]
 }
 
 func (l *Log) preSlice(preIndex int) []Entry {
