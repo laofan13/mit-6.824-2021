@@ -320,7 +320,7 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 				break
 			}
 		}
-		rf.log.preCuted(index)
+
 		reply.ConflictIndex = index + 1
 		reply.ConflictTerm = conflictTerm
 		return
@@ -332,9 +332,9 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 		rf.commitIndex = args.LeaderCommit
 		newCommit := args.PrevLogIndex + len(args.Entries)
 		if rf.commitIndex > newCommit {
-			DPrintf("%v: commit %v \n", rf.me, newCommit)
 			rf.commitIndex = newCommit
 		}
+		DPrintf("%v: commit %v \n", rf.me, rf.commitIndex)
 	}
 
 	reply.Success = true
@@ -374,6 +374,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	e := Entry{rf.currentTerm, command}
+	DPrintf("%v: receive a log %+v in Term %v\n", rf.me, e, rf.currentTerm)
 	rf.log.append(e)
 	rf.startAppendEntrys(false)
 
@@ -419,8 +420,8 @@ func (rf *Raft) advanceCommit() {
 		}
 
 		n := 1
-		for i := range rf.matchIndex {
-			if i != rf.me && rf.matchIndex[i] > index {
+		for i, _ := range rf.matchIndex {
+			if i != rf.me && rf.matchIndex[i] >= index {
 				n++
 			}
 		}
@@ -602,7 +603,7 @@ func (rf *Raft) applier() {
 			reply := ApplyMsg{
 				CommandValid: true,
 				CommandIndex: rf.lastApplied,
-				Command:      rf.log.entry(rf.lastApplied),
+				Command:      rf.log.entry(rf.lastApplied).Command,
 			}
 
 			DPrintf("%v: applier index: %v\n", rf.me, reply.CommandIndex)
