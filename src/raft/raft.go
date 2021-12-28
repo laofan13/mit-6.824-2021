@@ -102,13 +102,8 @@ type Raft struct {
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	var term int
-	var isleader bool
-
-	term = rf.currentTerm
-	isleader = rf.state == Leader
 	// Your code here (2A).
-	return term, isleader
+	return rf.currentTerm, rf.state == Leader
 }
 
 //
@@ -218,14 +213,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	isUptoDate := lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIndex <= args.LastLogIndex)
 
 	DPrintf("%v: T %v voteFor %v\n", rf.me, rf.currentTerm, rf.votedFor)
-	if (rf.currentTerm < args.Term || rf.votedFor == -1 || rf.votedFor == args.CandidateId) && isUptoDate {
+	if !isUptoDate || (rf.currentTerm == args.Term && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
+		reply.VoteGranted = false
+	} else {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 		rf.currentTerm = args.Term
 		rf.state = Follower
 		rf.electionTimer.Reset(RandElectionTimeout())
-	} else {
-		reply.VoteGranted = false
 	}
 
 	reply.Term = rf.currentTerm
@@ -288,7 +283,14 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//rule1
-	if rf.currentTerm > args.Term || rf.log.firstIndex() > args.PrevLogIndex {
+	if rf.currentTerm > args.Term {
+		reply.Success = false
+		reply.Term = rf.currentTerm
+		return
+	}
+
+	//rule2
+	if rf.log.firstIndex() > args.PrevLogIndex {
 		reply.Success = false
 		reply.Term = rf.currentTerm
 		return
@@ -324,10 +326,6 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 		return
 	}
 
-	if rf.currentTerm < args.Term {
-		rf.state, rf.currentTerm, rf.votedFor = Follower, args.Term, -1
-	}
-
 	rf.log.AppendLogs(args.PrevLogIndex, args.Entries)
 
 	if rf.commitIndex < args.LeaderCommit {
@@ -341,6 +339,8 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 
 	reply.Success = true
 	reply.Term = rf.currentTerm
+
+	rf.state = Follower
 	rf.electionTimer.Reset(RandElectionTimeout())
 
 	rf.applyCond.Signal()
@@ -534,7 +534,7 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 		if reply.VoteGranted {
 			*vote++
 			if rf.state == Candidater && rf.currentTerm == args.Term {
-				if *vote >= len(rf.peers)/2 {
+				if *vote > len(rf.peers)/2 {
 					DPrintf("%v: become Leader in Term %v LastIndex %v\n", rf.me, rf.currentTerm, rf.log.lastIndex())
 					rf.state = Leader
 					rf.startAppendEntrys(true)
