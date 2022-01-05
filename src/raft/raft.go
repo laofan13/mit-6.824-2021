@@ -142,7 +142,7 @@ func (rf *Raft) readPersist(data []byte) {
 	if d.Decode(&term) != nil ||
 		d.Decode(&voteFor) != nil ||
 		d.Decode(&log) != nil {
-		DPrintf("%v restore error from crash\n", rf.me)
+		DPrintf("%v restores persisted state failed", rf.me)
 	} else {
 		rf.currentTerm = term
 		rf.votedFor = voteFor
@@ -388,6 +388,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	e := Entry{rf.currentTerm, command}
 	DPrintf("%v: receive a log %+v in Term %v\n", rf.me, e, rf.currentTerm)
 	rf.log.append(e)
+	rf.persist()
 	rf.startAppendEntrys(false)
 
 	// Your code here (2B).
