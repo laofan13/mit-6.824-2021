@@ -202,9 +202,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// Your code here (2A, 2B).
-	if rf.currentTerm > args.Term {
+	if rf.currentTerm > args.Term || (rf.currentTerm == args.Term && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
 		reply.Term, reply.VoteGranted = rf.currentTerm, false
 		return
+	}
+
+	if rf.currentTerm < args.Term {
+		reply.VoteGranted = true
+		rf.state, rf.currentTerm, rf.votedFor = Follower, args.Term, -1
 	}
 
 	//比较日志那个新
@@ -213,17 +218,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	isUptoDate := lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIndex <= args.LastLogIndex)
 
 	DPrintf("%v: T %v voteFor %v\n", rf.me, rf.currentTerm, rf.votedFor)
-	if !isUptoDate || (rf.currentTerm == args.Term && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
-		reply.VoteGranted = false
-	} else {
-		reply.VoteGranted = true
-		rf.votedFor = args.CandidateId
-		rf.currentTerm = args.Term
-		rf.state = Follower
-		rf.electionTimer.Reset(RandElectionTimeout())
+	if !isUptoDate {
+		reply.Term, reply.VoteGranted = rf.currentTerm, false
+		return
 	}
 
-	reply.Term = rf.currentTerm
+	rf.votedFor = args.CandidateId
+	rf.electionTimer.Reset(RandElectionTimeout())
+	reply.Term, reply.VoteGranted = rf.currentTerm, true
 }
 
 //
@@ -289,10 +291,17 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 		return
 	}
 
+	if rf.currentTerm < args.Term {
+		rf.currentTerm, rf.votedFor = args.Term, -1
+	}
+
+	rf.state = Follower
+	rf.electionTimer.Reset(RandElectionTimeout())
+
 	//rule2
-	if rf.log.firstIndex() > args.PrevLogIndex {
+	if args.PrevLogIndex < rf.log.firstIndex() {
 		reply.Success = false
-		reply.Term = rf.currentTerm
+		reply.Term = 0
 		return
 	}
 
@@ -301,7 +310,7 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 		reply.Success = false
 		reply.Term = rf.currentTerm
 		reply.ConflictVaild = true
-		reply.ConflictIndex = rf.log.lastIndex()
+		reply.ConflictIndex = rf.log.lastIndex() + 1
 		reply.ConflictTerm = -1
 		return
 	}
@@ -312,13 +321,12 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 		reply.Term = rf.currentTerm
 		reply.ConflictVaild = true
 
-		index := args.PrevLogIndex
-		conflictTerm := rf.log.entry(index).Term
+		firstIndex := rf.log.firstIndex()
+		conflictTerm := rf.log.entry(args.PrevLogIndex).Term
+		index := args.PrevLogIndex - 1
 
-		for ; index >= rf.log.firstIndex(); index-- {
-			if rf.log.entry(index).Term != conflictTerm {
-				break
-			}
+		for index >= firstIndex && rf.log.entry(index).Term == conflictTerm {
+			index--
 		}
 
 		reply.ConflictIndex = index + 1
@@ -335,15 +343,11 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 			rf.commitIndex = newCommit
 		}
 		DPrintf("%v: commit %v \n", rf.me, rf.commitIndex)
+		rf.applyCond.Signal()
 	}
 
 	reply.Success = true
 	reply.Term = rf.currentTerm
-
-	rf.state = Follower
-	rf.electionTimer.Reset(RandElectionTimeout())
-
-	rf.applyCond.Signal()
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesAags, reply *AppendEntriesReply) bool {
@@ -436,10 +440,7 @@ func (rf *Raft) advanceCommit() {
 
 func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *AppendEntriesReply) {
 	DPrintf("%v AppendEntries reply from %v:%v\n", rf.me, peer, reply)
-	if rf.currentTerm < reply.Term {
-		rf.currentTerm, rf.state, rf.votedFor = reply.Term, Follower, -1
-		rf.electionTimer.Reset(RandElectionTimeout())
-	} else if rf.currentTerm == args.Term {
+	if rf.state == Leader && rf.currentTerm == args.Term {
 		if reply.Success {
 			newNextIndex := args.PrevLogIndex + len(args.Entries) + 1
 			newMatchIndex := newNextIndex - 1
@@ -453,26 +454,32 @@ func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *Ap
 			}
 			rf.advanceCommit()
 			DPrintf("%v: handleAppendEntries success: peer %v nextIndex %v matchIndex %v\n", rf.me, peer, rf.nextIndex[peer], rf.matchIndex[peer])
-		} else if reply.ConflictVaild {
-			if reply.ConflictIndex > rf.log.lastIndex() {
-				rf.nextIndex[peer] = rf.log.lastIndex()
-			} else if reply.ConflictIndex < rf.log.firstIndex() {
-				rf.nextIndex[peer] = rf.log.firstIndex() + 1
-			} else {
-				if rf.log.entry(reply.ConflictIndex).Term == reply.ConflictTerm {
-					index := reply.ConflictIndex
-					for ; index <= rf.log.lastIndex(); index++ {
-						if rf.log.entry(index).Term != reply.ConflictTerm {
-							break
+		} else {
+			if rf.currentTerm < reply.Term {
+				rf.currentTerm, rf.state, rf.votedFor = reply.Term, Follower, -1
+				rf.electionTimer.Reset(RandElectionTimeout())
+			} else if rf.currentTerm == reply.Term {
+				if reply.ConflictVaild {
+					if reply.ConflictIndex > rf.log.lastIndex() {
+						rf.nextIndex[peer] = rf.log.lastIndex()
+					} else if reply.ConflictIndex < rf.log.firstIndex() {
+						rf.nextIndex[peer] = rf.log.firstIndex() + 1
+					} else {
+						if rf.log.entry(reply.ConflictIndex).Term == reply.ConflictTerm {
+							lastIndex := rf.log.lastIndex()
+							index := reply.ConflictIndex
+							for index <= lastIndex && rf.log.entry(index).Term == reply.ConflictTerm {
+								index++
+							}
+							rf.nextIndex[peer] = index
+						} else {
+							rf.nextIndex[peer] = reply.ConflictIndex
 						}
 					}
-					rf.nextIndex[peer] = index
-				} else {
-					rf.nextIndex[peer] = reply.ConflictIndex
+				} else if rf.nextIndex[peer] > 1 {
+					rf.nextIndex[peer] -= 1
 				}
 			}
-		} else if rf.nextIndex[peer] > 1 {
-			rf.nextIndex[peer] -= 1
 		}
 	}
 }
@@ -486,7 +493,7 @@ func (rf *Raft) requestAppendEntries(peer int, heartBeat bool) {
 	}
 
 	if nextIndex-1 > rf.log.lastIndex() {
-		nextIndex = rf.log.lastIndex()
+		nextIndex = rf.log.lastIndex() + 1
 	}
 
 	args := &AppendEntriesAags{rf.currentTerm, rf.me, nextIndex - 1, rf.log.entry(nextIndex - 1).Term,
@@ -527,14 +534,9 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 		defer rf.mu.Unlock()
 
 		DPrintf("%v RequestVote reply from %v:%v\n", rf.me, peer, reply)
-		if rf.currentTerm < reply.Term {
-			rf.currentTerm, rf.state, rf.votedFor = reply.Term, Follower, -1
-			rf.electionTimer.Reset(RandElectionTimeout())
-		}
-
-		if reply.VoteGranted {
-			*vote++
-			if rf.state == Candidater && rf.currentTerm == args.Term {
+		if rf.currentTerm == args.Term && rf.state == Candidater {
+			if reply.VoteGranted {
+				*vote++
 				if *vote > len(rf.peers)/2 {
 					DPrintf("%v: become Leader in Term %v LastIndex %v\n", rf.me, rf.currentTerm, rf.log.lastIndex())
 					rf.state = Leader
@@ -545,6 +547,9 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 						rf.nextIndex[i] = rf.log.lastIndex() + 1
 					}
 				}
+			} else if rf.currentTerm < reply.Term {
+				rf.currentTerm, rf.state, rf.votedFor = reply.Term, Follower, -1
+				rf.electionTimer.Reset(RandElectionTimeout())
 			}
 		}
 	}
@@ -597,7 +602,6 @@ func (rf *Raft) applier() {
 	defer rf.mu.Unlock()
 
 	for rf.killed() == false {
-
 		if rf.lastApplied < rf.commitIndex && rf.lastApplied < rf.log.lastIndex() && rf.lastApplied+1 > rf.log.firstIndex() {
 			rf.lastApplied++
 			reply := ApplyMsg{
