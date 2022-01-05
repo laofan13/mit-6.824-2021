@@ -31,8 +31,8 @@ type Entry struct {
 }
 
 type Log struct {
-	logs       []Entry
-	startIndex int
+	Logs       []Entry
+	StartIndex int
 }
 
 func makeEmptyLog() Log {
@@ -40,38 +40,38 @@ func makeEmptyLog() Log {
 }
 
 func (l *Log) firstIndex() int {
-	return l.startIndex
+	return l.StartIndex
 }
 
 func (l *Log) lastIndex() int {
-	return l.startIndex + len(l.logs) - 1
+	return l.StartIndex + len(l.Logs) - 1
 }
 
 func (l *Log) entry(index int) Entry {
-	return l.logs[index-l.firstIndex()]
+	return l.Logs[index-l.firstIndex()]
 }
 
 func (l *Log) append(e Entry) {
-	l.logs = append(l.logs, e)
+	l.Logs = append(l.Logs, e)
 }
 
-func (l *Log) AppendLogs(startIndex int, logs []Entry) {
-	l.logs = append(l.logs[:startIndex+1-l.firstIndex()], logs...)
+func (l *Log) AppendLogs(StartIndex int, Logs []Entry) {
+	l.Logs = append(l.Logs[:StartIndex+1-l.firstIndex()], Logs...)
 }
 
 func (l *Log) preCuted(preIndex int) {
-	l.logs = l.logs[:preIndex-l.firstIndex()+1]
+	l.Logs = l.Logs[:preIndex-l.firstIndex()+1]
 }
 
 func (l *Log) nextCuted(nextIndex int) {
-	l.startIndex += nextIndex
-	l.logs = l.logs[nextIndex-l.firstIndex():]
+	l.StartIndex += nextIndex
+	l.Logs = l.Logs[nextIndex-l.firstIndex():]
 }
 
 func (l *Log) preSlice(preIndex int) []Entry {
-	return l.logs[:preIndex-l.firstIndex()+1]
+	return l.Logs[:preIndex-l.firstIndex()+1]
 }
 
 func (l *Log) nextSlice(nextIndex int) []Entry {
-	return l.logs[nextIndex-l.firstIndex():]
+	return l.Logs[nextIndex-l.firstIndex():]
 }

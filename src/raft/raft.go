@@ -20,6 +20,7 @@ package raft
 import (
 	//	"bytes"
 
+	"bytes"
 	"fmt"
 	"log"
 	"math/rand"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	//	"6.824/labgob"
+	"6.824/labgob"
 	"6.824/labrpc"
 )
 
@@ -114,12 +116,13 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -131,17 +134,20 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var term int
+	var voteFor int
+	var log Log
+	if d.Decode(&term) != nil ||
+		d.Decode(&voteFor) != nil ||
+		d.Decode(&log) != nil {
+		DPrintf("%v restore error from crash\n", rf.me)
+	} else {
+		rf.currentTerm = term
+		rf.votedFor = voteFor
+		rf.log = log
+	}
 }
 
 //
@@ -226,6 +232,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.votedFor = args.CandidateId
 	rf.electionTimer.Reset(RandElectionTimeout())
 	reply.Term, reply.VoteGranted = rf.currentTerm, true
+	rf.persist()
 }
 
 //
@@ -348,6 +355,7 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 
 	reply.Success = true
 	reply.Term = rf.currentTerm
+	rf.persist()
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesAags, reply *AppendEntriesReply) bool {
@@ -458,6 +466,7 @@ func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *Ap
 			if rf.currentTerm < reply.Term {
 				rf.currentTerm, rf.state, rf.votedFor = reply.Term, Follower, -1
 				rf.electionTimer.Reset(RandElectionTimeout())
+				rf.persist()
 			} else if rf.currentTerm == reply.Term {
 				if reply.ConflictVaild {
 					if reply.ConflictIndex > rf.log.lastIndex() {
@@ -516,6 +525,7 @@ func (rf *Raft) startAppendEntrys(heartBeat bool) {
 	if heartBeat {
 		DPrintf("%v:start heartBeat T %v\n", rf.me, rf.currentTerm)
 	}
+	rf.persist()
 	for i := range rf.peers {
 		if i != rf.me {
 			if rf.log.lastIndex() > rf.nextIndex[i] || heartBeat {
@@ -550,6 +560,7 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 			} else if rf.currentTerm < reply.Term {
 				rf.currentTerm, rf.state, rf.votedFor = reply.Term, Follower, -1
 				rf.electionTimer.Reset(RandElectionTimeout())
+				rf.persist()
 			}
 		}
 	}
@@ -560,7 +571,7 @@ func (rf *Raft) StartSelection() {
 	DPrintf("%v: tick T %v\n", rf.me, rf.currentTerm)
 	vote := 1
 	args := RequestVoteArgs{rf.currentTerm, rf.me, rf.log.lastIndex(), rf.log.entry(rf.log.lastIndex()).Term}
-
+	rf.persist()
 	for i := range rf.peers {
 		if rf.me != i {
 			go rf.requestVote(i, &args, &vote)
