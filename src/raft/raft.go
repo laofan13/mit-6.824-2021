@@ -230,7 +230,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	rf.votedFor = args.CandidateId
-	rf.electionTimer.Reset(RandElectionTimeout())
+	rf.resetElectionTimeout()
 	reply.Term, reply.VoteGranted = rf.currentTerm, true
 	rf.persist()
 }
@@ -303,7 +303,7 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 	}
 
 	rf.state = Follower
-	rf.electionTimer.Reset(RandElectionTimeout())
+	rf.resetElectionTimeout()
 
 	//rule2
 	if args.PrevLogIndex < rf.log.firstIndex() {
@@ -466,7 +466,7 @@ func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *Ap
 		} else {
 			if rf.currentTerm < reply.Term {
 				rf.currentTerm, rf.state, rf.votedFor = reply.Term, Follower, -1
-				rf.electionTimer.Reset(RandElectionTimeout())
+				rf.resetElectionTimeout()
 				rf.persist()
 			} else if rf.currentTerm == reply.Term {
 				if reply.ConflictVaild {
@@ -552,7 +552,7 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 					DPrintf("%v: become Leader in Term %v LastIndex %v\n", rf.me, rf.currentTerm, rf.log.lastIndex())
 					rf.state = Leader
 					rf.startAppendEntrys(true)
-					rf.heartTimer.Reset(RandHeartTimeout())
+					rf.resetHeartTimeout()
 
 					for i := range rf.nextIndex {
 						rf.nextIndex[i] = rf.log.lastIndex() + 1
@@ -560,7 +560,7 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 				}
 			} else if rf.currentTerm < reply.Term {
 				rf.currentTerm, rf.state, rf.votedFor = reply.Term, Follower, -1
-				rf.electionTimer.Reset(RandElectionTimeout())
+				rf.resetElectionTimeout()
 				rf.persist()
 			}
 		}
@@ -592,7 +592,7 @@ func (rf *Raft) ticker() {
 			rf.mu.Lock()
 			if rf.state == Leader {
 				rf.startAppendEntrys(true) //heartBeat
-				rf.heartTimer.Reset(RandHeartTimeout())
+				rf.resetHeartTimeout()
 			}
 			rf.mu.Unlock()
 		case <-rf.electionTimer.C:
@@ -602,7 +602,7 @@ func (rf *Raft) ticker() {
 				rf.state = Candidater
 				rf.votedFor = rf.me
 				rf.StartSelection()
-				rf.electionTimer.Reset(RandElectionTimeout())
+				rf.resetElectionTimeout()
 			}
 			rf.mu.Unlock()
 		}
@@ -666,8 +666,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 
-	rf.electionTimer = time.NewTimer(RandHeartTimeout())
-	rf.heartTimer = time.NewTimer(RandElectionTimeout())
+	rf.electionTimer = time.NewTimer(0)
+	rf.heartTimer = time.NewTimer(0)
+	rf.resetElectionTimeout()
+	rf.resetHeartTimeout()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -680,12 +682,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-func RandElectionTimeout() time.Duration {
+func (rf *Raft) resetElectionTimeout() {
 	i := rand.Int31n(300)
-	return time.Millisecond * time.Duration(i+200)
+	t := time.Millisecond * time.Duration(i+200)
+	rf.electionTimer.Reset(t)
 }
 
-func RandHeartTimeout() time.Duration {
+func (rf *Raft) resetHeartTimeout() {
 	i := rand.Int31n(50)
-	return time.Millisecond * time.Duration(i+100)
+	t := time.Millisecond * time.Duration(i+100)
+	rf.heartTimer.Reset(t)
 }
