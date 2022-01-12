@@ -526,7 +526,6 @@ func (rf *Raft) startAppendEntrys(heartBeat bool) {
 	if heartBeat {
 		DPrintf("%v:start heartBeat T %v\n", rf.me, rf.currentTerm)
 	}
-	rf.persist()
 	for i := range rf.peers {
 		if i != rf.me {
 			if rf.log.lastIndex() > rf.nextIndex[i] || heartBeat {
@@ -572,7 +571,6 @@ func (rf *Raft) StartSelection() {
 	DPrintf("%v: tick T %v\n", rf.me, rf.currentTerm)
 	vote := 1
 	args := RequestVoteArgs{rf.currentTerm, rf.me, rf.log.lastIndex(), rf.log.entry(rf.log.lastIndex()).Term}
-	rf.persist()
 	for i := range rf.peers {
 		if rf.me != i {
 			go rf.requestVote(i, &args, &vote)
@@ -601,6 +599,7 @@ func (rf *Raft) ticker() {
 				rf.currentTerm += 1
 				rf.state = Candidater
 				rf.votedFor = rf.me
+				rf.persist()
 				rf.StartSelection()
 				rf.resetElectionTimeout()
 			}
