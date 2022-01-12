@@ -207,6 +207,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	// Your code here (2A, 2B).
 	if rf.currentTerm > args.Term || (rf.currentTerm == args.Term && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
 		reply.Term, reply.VoteGranted = rf.currentTerm, false
@@ -232,7 +233,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.votedFor = args.CandidateId
 	rf.resetElectionTimeout()
 	reply.Term, reply.VoteGranted = rf.currentTerm, true
-	rf.persist()
 }
 
 //
@@ -291,6 +291,7 @@ type AppendEntriesReply struct {
 func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	//rule1
 	if rf.currentTerm > args.Term {
 		reply.Success = false
@@ -355,7 +356,6 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 
 	reply.Success = true
 	reply.Term = rf.currentTerm
-	rf.persist()
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesAags, reply *AppendEntriesReply) bool {
