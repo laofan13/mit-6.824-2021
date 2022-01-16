@@ -634,7 +634,7 @@ func (rf *Raft) resetElectionTimeout() {
 }
 
 func (rf *Raft) resetHeartTimeout() {
-	i := rand.Int31n(50)
+	i := rand.Int31n(30)
 	t := time.Millisecond * time.Duration(i+100)
 	rf.heartTimer.Reset(t)
 }
