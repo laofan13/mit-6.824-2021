@@ -127,6 +127,11 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		return false
 	}
 
+	// if lastIncludedIndex > rf.log.lastIndex() {
+	// 	rf.log = makeLog(lastIncludedIndex, lastIncludedTerm)
+	// } else {
+	// 	rf.log.nextCuted(lastIncludedIndex)
+	// }
 	if lastIncludedIndex > rf.log.lastIndex() {
 		rf.log = makeEmptyLog()
 		rf.log.StartIndex = lastIncludedIndex
@@ -270,7 +275,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	if rf.currentTerm > args.Term {
 		return
-	} else if rf.currentTerm < args.Term {
+	}
+	if rf.currentTerm < args.Term {
 		rf.currentTerm, rf.votedFor = args.Term, -1
 		rf.persist()
 	}
@@ -348,20 +354,14 @@ func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *Ap
 				rf.persist()
 			} else if rf.currentTerm == reply.Term {
 				if reply.ConflictVaild {
-					if reply.ConflictIndex > rf.log.lastIndex() {
-						rf.nextIndex[peer] = rf.log.lastIndex()
-					} else if reply.ConflictIndex < rf.log.firstIndex() {
-						rf.nextIndex[peer] = rf.log.firstIndex() + 1
-					} else {
-						if rf.log.entry(reply.ConflictIndex).Term == reply.ConflictTerm {
-							lastIndex := rf.log.lastIndex()
-							index := reply.ConflictIndex
-							for index <= lastIndex && rf.log.entry(index).Term == reply.ConflictTerm {
-								index++
+					rf.nextIndex[peer] = reply.ConflictIndex
+					if reply.ConflictTerm != -1 {
+						firstIndex := rf.log.firstIndex()
+						for i := args.PrevLogIndex; i >= firstIndex; i-- {
+							if rf.log.entry(i).Term == reply.ConflictTerm {
+								rf.nextIndex[peer] = i + 1
+								break
 							}
-							rf.nextIndex[peer] = index
-						} else {
-							rf.nextIndex[peer] = reply.ConflictIndex
 						}
 					}
 				} else if rf.nextIndex[peer] > 1 {
@@ -387,6 +387,10 @@ func (rf *Raft) handleInstallSnapshot(peer int, args *InstallSnapshotArgs, reply
 
 func (rf *Raft) requestAppendEntries(peer int, heartBeat bool) {
 	rf.mu.Lock()
+	if rf.state != Leader {
+		rf.mu.Unlock()
+		return
+	}
 	nextIndex := rf.nextIndex[peer]
 
 	if nextIndex <= rf.log.firstIndex() {
@@ -422,8 +426,8 @@ func (rf *Raft) requestAppendEntries(peer int, heartBeat bool) {
 		reply := &AppendEntriesReply{}
 		if rf.sendAppendEntries(peer, args, reply) {
 			rf.mu.Lock()
-			defer rf.mu.Unlock()
 			rf.handleAppendEntries(peer, args, reply)
+			rf.mu.Unlock()
 		}
 	}
 }

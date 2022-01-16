@@ -39,6 +39,13 @@ func makeEmptyLog() Log {
 	return Log{make([]Entry, 1), 0}
 }
 
+func makeLog(index int, term int) Log {
+	l := makeEmptyLog()
+	l.setFirstIndex(index)
+	l.Logs[0].Term = term
+	return l
+}
+
 func (l *Log) firstIndex() int {
 	return l.StartIndex
 }
