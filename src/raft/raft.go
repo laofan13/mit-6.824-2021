@@ -107,6 +107,15 @@ func (rf *Raft) GetState() (int, bool) {
 	return rf.currentTerm, rf.state == Leader
 }
 
+func (rf *Raft) encodeState() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	return w.Bytes()
+}
+
 //
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
@@ -115,13 +124,7 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.votedFor)
-	e.Encode(rf.log)
-	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+	rf.persister.SaveRaftState(rf.encodeState())
 }
 
 //
@@ -166,7 +169,20 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	snapshotIndex := rf.log.firstIndex()
+	if index <= snapshotIndex {
+		DPrintf("%v rejects replacing log with snapshotIndex %v as current snapshotIndex %v is larger in term %v", rf.me, index, snapshotIndex, rf.currentTerm)
+		return
+	}
+	rf.log.nextCuted(index)
+	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	var command int
+	d.Decode(&command)
+	DPrintf("%v T:%v Snapshot:{index: %v snapshotIndex: %v,snapshot %v}\n", rf.me, rf.currentTerm, index, snapshotIndex, command)
 }
 
 //
@@ -338,36 +354,6 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-func (rf *Raft) advanceCommit() {
-	if rf.state != Leader {
-		log.Fatalf("advanceCommit state: %v\n", rf.state)
-	}
-
-	start := rf.commitIndex + 1
-	if start < rf.log.firstIndex() {
-		start = rf.log.firstIndex()
-	}
-
-	for index := start; index <= rf.log.lastIndex(); index++ {
-		if rf.log.entry(index).Term != rf.currentTerm {
-			continue
-		}
-
-		n := 1
-		for i, _ := range rf.matchIndex {
-			if i != rf.me && rf.matchIndex[i] >= index {
-				n++
-			}
-		}
-
-		if n > len(rf.peers)/2 {
-			DPrintf("%v: Commit %v \n", rf.me, index)
-			rf.commitIndex = index
-		}
-	}
-	rf.applyCond.Signal()
-}
-
 func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *AppendEntriesReply) {
 	DPrintf("%v AppendEntries reply from %v:%v\n", rf.me, peer, reply)
 	if rf.state == Leader && rf.currentTerm == args.Term {
@@ -499,6 +485,61 @@ func (rf *Raft) StartSelection() {
 	}
 }
 
+func (rf *Raft) advanceCommit() {
+	if rf.state != Leader {
+		log.Fatalf("advanceCommit state: %v\n", rf.state)
+	}
+
+	start := rf.commitIndex + 1
+	if start < rf.log.firstIndex() {
+		start = rf.log.firstIndex()
+	}
+
+	for index := start; index <= rf.log.lastIndex(); index++ {
+		if rf.log.entry(index).Term != rf.currentTerm {
+			continue
+		}
+
+		n := 1
+		for i, _ := range rf.matchIndex {
+			if i != rf.me && rf.matchIndex[i] >= index {
+				n++
+			}
+		}
+
+		if n > len(rf.peers)/2 {
+			DPrintf("%v: Commit %v \n", rf.me, index)
+			rf.commitIndex = index
+		}
+	}
+	rf.applyCond.Signal()
+}
+
+func (rf *Raft) applier() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	for rf.killed() == false {
+		if rf.lastApplied < rf.commitIndex && rf.lastApplied < rf.log.lastIndex() && rf.lastApplied+1 > rf.log.firstIndex() {
+			rf.lastApplied++
+			reply := ApplyMsg{
+				CommandValid: true,
+				CommandIndex: rf.lastApplied,
+				Command:      rf.log.entry(rf.lastApplied).Command,
+			}
+
+			DPrintf("%v: applier index: %v\n", rf.me, reply.CommandIndex)
+
+			rf.mu.Unlock()
+			rf.applyCh <- reply
+			rf.mu.Lock()
+		} else {
+			rf.applyCond.Wait()
+		}
+
+	}
+}
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
@@ -526,31 +567,6 @@ func (rf *Raft) ticker() {
 			}
 			rf.mu.Unlock()
 		}
-	}
-}
-
-func (rf *Raft) applier() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	for rf.killed() == false {
-		if rf.lastApplied < rf.commitIndex && rf.lastApplied < rf.log.lastIndex() && rf.lastApplied+1 > rf.log.firstIndex() {
-			rf.lastApplied++
-			reply := ApplyMsg{
-				CommandValid: true,
-				CommandIndex: rf.lastApplied,
-				Command:      rf.log.entry(rf.lastApplied).Command,
-			}
-
-			DPrintf("%v: applier index: %v\n", rf.me, reply.CommandIndex)
-
-			rf.mu.Unlock()
-			rf.applyCh <- reply
-			rf.mu.Lock()
-		} else {
-			rf.applyCond.Wait()
-		}
-
 	}
 }
 
