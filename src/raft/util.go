@@ -43,6 +43,10 @@ func (l *Log) firstIndex() int {
 	return l.StartIndex
 }
 
+func (l *Log) setFirstIndex(firstIndex int) {
+	l.StartIndex = firstIndex
+}
+
 func (l *Log) lastIndex() int {
 	return l.StartIndex + len(l.Logs) - 1
 }
@@ -64,8 +68,9 @@ func (l *Log) preCuted(preIndex int) {
 }
 
 func (l *Log) nextCuted(nextIndex int) {
-	l.StartIndex += nextIndex
 	l.Logs = l.Logs[nextIndex-l.firstIndex():]
+	l.setFirstIndex(nextIndex)
+	l.Logs[0].Command = nil
 }
 
 func (l *Log) preSlice(preIndex int) []Entry {
