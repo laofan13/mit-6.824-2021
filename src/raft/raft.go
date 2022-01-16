@@ -127,11 +127,6 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		return false
 	}
 
-	// if lastIncludedIndex > rf.log.lastIndex() {
-	// 	rf.log = makeLog(lastIncludedIndex, lastIncludedTerm)
-	// } else {
-	// 	rf.log.nextCuted(lastIncludedIndex)
-	// }
 	if lastIncludedIndex > rf.log.lastIndex() {
 		rf.log = makeEmptyLog()
 		rf.log.StartIndex = lastIncludedIndex
@@ -157,11 +152,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	}
 	rf.log.nextCuted(index)
 	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
-	r := bytes.NewBuffer(snapshot)
-	d := labgob.NewDecoder(r)
-	var command int
-	d.Decode(&command)
-	DPrintf("%v T:%v Snapshot:{index: %v snapshotIndex: %v,snapshot %v}\n", rf.me, rf.currentTerm, index, snapshotIndex, command)
+	DPrintf("%v T:%v Snapshot:{index: %v snapshotIndex: %v,snapshot %v}\n", rf.me, rf.currentTerm, index, snapshotIndex, snapshot)
 }
 
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
@@ -633,7 +624,7 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) resetElectionTimeout() {
 	i := rand.Int31n(1000)
-	t := time.Millisecond * time.Duration(i+1000)
+	t := time.Millisecond * time.Duration(i+500)
 	rf.electionTimer.Reset(t)
 }
 
