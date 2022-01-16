@@ -245,7 +245,7 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntri
 			index--
 		}
 
-		reply.ConflictIndex = index + 1
+		reply.ConflictIndex = index
 		reply.ConflictTerm = conflictTerm
 		return
 	}
@@ -632,13 +632,12 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) resetElectionTimeout() {
-	i := rand.Int31n(300)
-	t := time.Millisecond * time.Duration(i+200)
+	i := rand.Int31n(1000)
+	t := time.Millisecond * time.Duration(i+1000)
 	rf.electionTimer.Reset(t)
 }
 
 func (rf *Raft) resetHeartTimeout() {
-	i := rand.Int31n(30)
-	t := time.Millisecond * time.Duration(i+100)
+	t := time.Millisecond * time.Duration(120)
 	rf.heartTimer.Reset(t)
 }
