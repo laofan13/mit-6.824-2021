@@ -47,8 +47,16 @@ func (l *Log) setFirstIndex(firstIndex int) {
 	l.StartIndex = firstIndex
 }
 
+func (l *Log) firstLog() Entry {
+	return l.entry(l.firstIndex())
+}
+
 func (l *Log) lastIndex() int {
 	return l.StartIndex + len(l.Logs) - 1
+}
+
+func (l *Log) lastLog() Entry {
+	return l.entry(l.lastIndex())
 }
 
 func (l *Log) entry(index int) Entry {
