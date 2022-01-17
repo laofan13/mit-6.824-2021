@@ -187,7 +187,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term, reply.VoteGranted = rf.currentTerm, true
 }
 
-func (rf *Raft) RequestAppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply) {
+func (rf *Raft) AppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
@@ -294,7 +294,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesAags, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestAppendEntries", args, reply)
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -306,9 +306,10 @@ func (rf *Raft) sendInstallSnapshot(peer int, args *InstallSnapshotArgs, reply *
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	// Your code here (2B).
 
 	if rf.state != Leader {
-		return -1, rf.currentTerm, false
+		return -1, -1, false
 	}
 
 	e := Entry{rf.currentTerm, command}
@@ -316,8 +317,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.log.append(e)
 	rf.persist()
 	rf.startAppendEntrys(false)
-
-	// Your code here (2B).
 
 	return rf.log.lastIndex(), rf.currentTerm, true
 }
@@ -343,19 +342,19 @@ func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *Ap
 				rf.currentTerm, rf.state, rf.votedFor = reply.Term, Follower, -1
 				rf.resetElectionTimeout()
 				rf.persist()
-			} else if rf.currentTerm == reply.Term {
-				if reply.ConflictVaild {
-					rf.nextIndex[peer] = reply.ConflictIndex
-					if reply.ConflictTerm != -1 {
-						firstIndex := rf.log.firstIndex()
-						for i := args.PrevLogIndex; i >= firstIndex; i-- {
-							if rf.log.entry(i).Term == reply.ConflictTerm {
-								rf.nextIndex[peer] = i + 1
-								break
-							}
+			} else if rf.currentTerm == reply.Term && reply.ConflictVaild {
+				rf.nextIndex[peer] = reply.ConflictIndex
+				if reply.ConflictTerm != -1 {
+					firstIndex := rf.log.firstIndex()
+					for i := args.PrevLogIndex; i >= firstIndex; i-- {
+						if rf.log.entry(i).Term == reply.ConflictTerm {
+							rf.nextIndex[peer] = i + 1
+							break
 						}
 					}
-				} else if rf.nextIndex[peer] > 1 {
+				}
+			} else {
+				if rf.nextIndex[peer] > 1 {
 					rf.nextIndex[peer] -= 1
 				}
 			}
@@ -384,7 +383,7 @@ func (rf *Raft) requestAppendEntries(peer int, heartBeat bool) {
 	}
 	nextIndex := rf.nextIndex[peer]
 
-	if nextIndex <= rf.log.firstIndex() {
+	if nextIndex-1 < rf.log.firstIndex() {
 		// only snapshot can catch up
 		DPrintf("%v state:{Term %v firstIndex %v} start InstallSnapshot \n", rf.me, rf.currentTerm, rf.log.firstIndex())
 		args := InstallSnapshotArgs{
@@ -403,7 +402,8 @@ func (rf *Raft) requestAppendEntries(peer int, heartBeat bool) {
 		}
 	} else {
 		if nextIndex-1 > rf.log.lastIndex() {
-			nextIndex = rf.log.lastIndex() + 1
+			nextIndex = rf.log.lastIndex()
+			rf.nextIndex[peer] = nextIndex
 		}
 
 		args := &AppendEntriesAags{rf.currentTerm, rf.me, nextIndex - 1, rf.log.entry(nextIndex - 1).Term,
@@ -455,7 +455,7 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 					rf.resetHeartTimeout()
 
 					for i := range rf.nextIndex {
-						rf.nextIndex[i] = rf.log.lastIndex() + 1
+						rf.matchIndex[i], rf.nextIndex[i] = 0, rf.log.lastIndex()+1
 					}
 				}
 			} else if rf.currentTerm < reply.Term {
@@ -486,7 +486,8 @@ func (rf *Raft) advanceCommit() {
 
 	start := rf.commitIndex + 1
 	if start < rf.log.firstIndex() {
-		start = rf.log.firstIndex()
+		// start = rf.log.firstIndex() + 1
+		return
 	}
 
 	for index := start; index <= rf.log.lastIndex(); index++ {
@@ -530,7 +531,6 @@ func (rf *Raft) applier() {
 		} else {
 			rf.applyCond.Wait()
 		}
-
 	}
 }
 
@@ -625,10 +625,12 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) resetElectionTimeout() {
 	i := rand.Int31n(1000)
 	t := time.Millisecond * time.Duration(i+500)
+	rf.electionTimer.Stop()
 	rf.electionTimer.Reset(t)
 }
 
 func (rf *Raft) resetHeartTimeout() {
 	t := time.Millisecond * time.Duration(120)
+	rf.heartTimer.Stop()
 	rf.heartTimer.Reset(t)
 }
