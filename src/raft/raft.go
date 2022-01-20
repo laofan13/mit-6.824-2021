@@ -173,7 +173,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	//比较日志那个新
 	lastIndex := rf.log.lastIndex()
-	lastTerm := rf.log.entry(lastIndex).Term
+	lastTerm := rf.log.lastLog().Term
 	isUptoDate := lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && lastIndex <= args.LastLogIndex)
 
 	DPrintf("%v: T %v voteFor %v\n", rf.me, rf.currentTerm, rf.votedFor)
@@ -323,7 +323,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *AppendEntriesReply) {
 	DPrintf("%v AppendEntries reply from %v:%v\n", rf.me, peer, reply)
-	if rf.state == Leader && rf.currentTerm == args.Term {
+	if rf.currentTerm == args.Term {
 		if reply.Success {
 			newNextIndex := args.PrevLogIndex + len(args.Entries) + 1
 			newMatchIndex := newNextIndex - 1
@@ -354,7 +354,7 @@ func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *Ap
 					}
 				}
 			} else {
-				if rf.nextIndex[peer] > 1 {
+				if rf.nextIndex[peer] > rf.log.firstIndex()+1 {
 					rf.nextIndex[peer] -= 1
 				}
 			}
@@ -367,6 +367,7 @@ func (rf *Raft) handleInstallSnapshot(peer int, args *InstallSnapshotArgs, reply
 		if rf.currentTerm < reply.Term {
 			rf.state = Follower
 			rf.currentTerm, rf.votedFor = reply.Term, -1
+			rf.resetElectionTimeout()
 			rf.persist()
 		} else {
 			rf.matchIndex[peer], rf.nextIndex[peer] = args.LastIncludedIndex, args.LastIncludedIndex+1
@@ -403,13 +404,9 @@ func (rf *Raft) requestAppendEntries(peer int, heartBeat bool) {
 	} else {
 		if nextIndex-1 > rf.log.lastIndex() {
 			nextIndex = rf.log.lastIndex()
-			rf.nextIndex[peer] = nextIndex
 		}
 
-		args := &AppendEntriesAags{rf.currentTerm, rf.me, nextIndex - 1, rf.log.entry(nextIndex - 1).Term,
-			make([]Entry, rf.log.lastIndex()-nextIndex+1), rf.commitIndex}
-
-		copy(args.Entries, rf.log.nextSlice(nextIndex))
+		args := rf.makeAppendEntriesArgs(nextIndex - 1)
 		rf.mu.Unlock()
 
 		DPrintf("%v:requestAppendEntries to %v: %v\n", rf.me, peer, args)
@@ -420,6 +417,19 @@ func (rf *Raft) requestAppendEntries(peer int, heartBeat bool) {
 			rf.handleAppendEntries(peer, args, reply)
 			rf.mu.Unlock()
 		}
+	}
+}
+
+func (rf *Raft) makeAppendEntriesArgs(prevLogIndex int) *AppendEntriesAags {
+	entries := make([]Entry, rf.log.lastIndex()-prevLogIndex)
+	copy(entries, rf.log.nextSlice(prevLogIndex+1))
+	return &AppendEntriesAags{
+		Term:         rf.currentTerm,
+		LeaderId:     rf.me,
+		PrevLogIndex: prevLogIndex,
+		PrevLogTerm:  rf.log.entry(prevLogIndex).Term,
+		Entries:      entries,
+		LeaderCommit: rf.commitIndex,
 	}
 }
 
@@ -445,7 +455,7 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 		defer rf.mu.Unlock()
 
 		DPrintf("%v RequestVote reply from %v:%v\n", rf.me, peer, reply)
-		if rf.currentTerm == args.Term && rf.state == Candidater {
+		if rf.currentTerm == args.Term {
 			if reply.VoteGranted {
 				*vote++
 				if *vote > len(rf.peers)/2 {
@@ -471,7 +481,7 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 func (rf *Raft) StartSelection() {
 	DPrintf("%v: tick T %v\n", rf.me, rf.currentTerm)
 	vote := 1
-	args := RequestVoteArgs{rf.currentTerm, rf.me, rf.log.lastIndex(), rf.log.entry(rf.log.lastIndex()).Term}
+	args := RequestVoteArgs{rf.currentTerm, rf.me, rf.log.lastIndex(), rf.log.lastLog().Term}
 	for i := range rf.peers {
 		if rf.me != i {
 			go rf.requestVote(i, &args, &vote)
@@ -486,7 +496,7 @@ func (rf *Raft) advanceCommit() {
 
 	start := rf.commitIndex + 1
 	if start < rf.log.firstIndex() {
-		// start = rf.log.firstIndex() + 1
+		// start = rf.log.firstIndex()
 		return
 	}
 
@@ -542,13 +552,6 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		select {
-		case <-rf.heartTimer.C:
-			rf.mu.Lock()
-			if rf.state == Leader {
-				rf.startAppendEntrys(true) //heartBeat
-				rf.resetHeartTimeout()
-			}
-			rf.mu.Unlock()
 		case <-rf.electionTimer.C:
 			rf.mu.Lock()
 			if rf.state != Leader {
@@ -558,6 +561,13 @@ func (rf *Raft) ticker() {
 				rf.persist()
 				rf.StartSelection()
 				rf.resetElectionTimeout()
+			}
+			rf.mu.Unlock()
+		case <-rf.heartTimer.C:
+			rf.mu.Lock()
+			if rf.state == Leader {
+				rf.startAppendEntrys(true) //heartBeat
+				rf.resetHeartTimeout()
 			}
 			rf.mu.Unlock()
 		}

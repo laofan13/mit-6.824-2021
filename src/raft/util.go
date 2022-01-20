@@ -39,19 +39,8 @@ func makeEmptyLog() Log {
 	return Log{make([]Entry, 1), 0}
 }
 
-func makeLog(index int, term int) Log {
-	l := makeEmptyLog()
-	l.setFirstIndex(index)
-	l.Logs[0].Term = term
-	return l
-}
-
 func (l *Log) firstIndex() int {
 	return l.StartIndex
-}
-
-func (l *Log) setFirstIndex(firstIndex int) {
-	l.StartIndex = firstIndex
 }
 
 func (l *Log) firstLog() Entry {
@@ -84,7 +73,7 @@ func (l *Log) preCuted(preIndex int) {
 
 func (l *Log) nextCuted(nextIndex int) {
 	l.Logs = l.Logs[nextIndex-l.firstIndex():]
-	l.setFirstIndex(nextIndex)
+	l.StartIndex = nextIndex
 	l.Logs[0].Command = nil
 }
 
