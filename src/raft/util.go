@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"log"
 	"os"
 )
@@ -30,13 +31,21 @@ type Entry struct {
 	Command interface{}
 }
 
+func (e Entry) String() string {
+	return fmt.Sprintf("T %v", e.Term)
+}
+
 type Log struct {
 	Logs       []Entry
 	StartIndex int
 }
 
-func makeEmptyLog() Log {
+func mkEmptyLog() Log {
 	return Log{make([]Entry, 1), 0}
+}
+
+func mkLog(logs []Entry, startIndex int) Log {
+	return Log{logs, startIndex}
 }
 
 func (l *Log) firstIndex() int {
