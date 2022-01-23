@@ -109,6 +109,8 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.votedFor = voteFor
 		rf.log = log
 	}
+
+	rf.lastApplied, rf.commitIndex = rf.log.firstIndex(), rf.log.firstIndex()
 }
 
 //
