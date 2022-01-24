@@ -111,6 +111,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		rf.log = mkLog(rf.log.nextSlice(lastIncludedIndex), lastIncludedIndex)
 	}
 	rf.log.Logs[0].Term = lastIncludedTerm
+
 	rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
 
 	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
@@ -313,6 +314,7 @@ func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *Ap
 	DPrintf("%v AppendEntries reply from %v %v\n", rf.me, peer, reply)
 	if rf.currentTerm < reply.Term {
 		rf.newTerm(reply.Term)
+		rf.resetElectionTimeout()
 	} else if rf.currentTerm == args.Term {
 		if reply.Success {
 			newNextIndex := args.PrevLogIndex + len(args.Entries) + 1
@@ -341,6 +343,7 @@ func (rf *Raft) handleInstallSnapshot(peer int, args *InstallSnapshotArgs, reply
 	if rf.currentTerm == args.Term {
 		if rf.currentTerm < reply.Term {
 			rf.newTerm(reply.Term)
+			rf.resetElectionTimeout()
 		} else {
 			rf.matchIndex[peer], rf.nextIndex[peer] = args.LastIncludedIndex, args.LastIncludedIndex+1
 		}
@@ -434,6 +437,7 @@ func (rf *Raft) requestVote(peer int, args *RequestVoteArgs, vote *int) {
 		DPrintf("%v: RequestVote reply from %v: %v\n", rf.me, peer, reply)
 		if rf.currentTerm < reply.Term {
 			rf.newTerm(reply.Term)
+			rf.resetElectionTimeout()
 		}
 
 		if reply.VoteGranted {
