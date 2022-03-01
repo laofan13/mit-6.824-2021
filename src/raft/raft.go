@@ -325,7 +325,7 @@ func (rf *Raft) handleAppendEntries(peer int, args *AppendEntriesAags, reply *Ap
 			if newMatchIndex > rf.matchIndex[peer] {
 				rf.matchIndex[peer] = newMatchIndex
 			}
-			DPrintf("%v: handleAppendEntries success: peer %v nextIndex %v matchIndex %v\n", rf.me, peer, newMatchIndex, newMatchIndex)
+			DPrintf("%v: handleAppendEntries success: peer %v nextIndex %v matchIndex %v\n", rf.me, peer, rf.nextIndex[peer], rf.matchIndex[peer])
 		} else if reply.ConflictVaild {
 			rf.handleConflictTerm(peer, args, reply)
 		} else if rf.nextIndex[peer] > 1 {
