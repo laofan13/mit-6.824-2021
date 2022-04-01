@@ -1,7 +1,8 @@
 package kvraft
 
 import (
-	"log"
+	"bytes"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,34 +11,6 @@ import (
 	"6.824/labrpc"
 	"6.824/raft"
 )
-
-const Debug = true
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
-}
-
-type Op_flag int
-
-const (
-	Op_GET    Op_flag = 0 //Get
-	Op_PUT    Op_flag = 1 //put
-	Op_APPEND Op_flag = 2 //Append
-)
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
-	Flag  Op_flag
-	Key   string
-	Value string
-
-	Id string // unique identfiy
-}
 
 type KVServer struct {
 	mu      sync.Mutex
@@ -49,162 +22,127 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	data map[string]string
-
-	requests map[string]bool
+	lastApplied    int
+	kvStateMachine KVStateMachine
+	lastOperations map[int64]OperationContext
+	notifyChans    map[int]chan *CommandResponse
 }
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
-	DPrintf("%v Get args %v\n", kv.me, args)
-	op := Op{
-		Flag: Op_GET,
-		Key:  args.Key,
-		Id:   args.Id,
-	}
+func (kv *KVServer) Command(request *CommandRequest, response *CommandResponse) {
+	defer DPrintf("{Node %v} processes CommandRequest %v with CommandResponse %v", kv.me, request, response)
 
-	ok := kv.one(op)
-	if !ok {
-		reply.Err = ErrWrongLeader
-		reply.Value = ""
-		return
-	}
 	kv.mu.Lock()
-	val, ok := kv.data[args.Key]
-	kv.mu.Unlock()
-	if ok {
-		reply.Err = OK
-		reply.Value = val
-	} else {
-		reply.Err = ErrNoKey
-		reply.Value = ""
-	}
-	DPrintf("%v GET reply %v\n", kv.me, reply)
-}
-
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	DPrintf("%v PutAppend args %v \n", kv.me, args)
-	op := Op{
-		Key:   args.Key,
-		Value: args.Value,
-		Id:    args.Id,
-	}
-	if args.Op == "Put" {
-		op.Flag = Op_PUT
-	} else if args.Op == "Append" {
-		op.Flag = Op_APPEND
-	} else {
-		reply.Err = ErrWrongLeader
-		DPrintf("%v: op %v not found\n", kv.me, args.Op)
-		return
-	}
-
-	ok := kv.one(op)
-	if ok {
-		DPrintf("%v apply op %v key %v value %v\n", kv.me, args.Op, op.Key, op.Value)
-		reply.Err = OK
-	} else {
-		reply.Err = ErrWrongLeader
-	}
-}
-
-func (kv *KVServer) one(op Op) bool {
-	kv.mu.Lock()
-	val, ok := kv.requests[op.Id]
-	kv.mu.Unlock()
-
-	if !ok {
-		index, _, ok1 := kv.rf.Start(op)
-		if ok1 && index != -1 {
-			kv.mu.Lock()
-			kv.requests[op.Id] = false
-			kv.mu.Unlock()
-
-			return kv.checkOp(op)
-		}
-	} else {
-		if val {
-			return true
-		} else {
-			return kv.checkOp(op)
-		}
-	}
-
-	return false
-}
-
-func (kv *KVServer) checkOp(op Op) bool {
-	t := time.Now()
-	for time.Since(t).Seconds() < 1 {
-
-		kv.mu.Lock()
-		val, ok := kv.requests[op.Id]
+	if request.Op != Op_Get && kv.isDuplicateRequest(request.ClientId, request.CommandId) {
+		lastResponse := kv.lastOperations[request.ClientId].Response
+		response.Value, response.Err = lastResponse.Value, lastResponse.Err
 		kv.mu.Unlock()
-
-		if ok && val {
-
-			return true
-		}
-		time.Sleep(20 * time.Microsecond)
+		return
 	}
-	return false
+	kv.mu.Unlock()
+
+	index, _, isLeader := kv.rf.Start(Command{request})
+	if !isLeader {
+		response.Err = ErrWrongLeader
+		return
+	}
+
+	kv.mu.Lock()
+	ch := kv.getNotifyChan(index)
+	kv.mu.Unlock()
+
+	select {
+	case result := <-ch:
+		response.Value, response.Err = result.Value, result.Err
+	case <-time.After(ExecuteTimeout):
+		response.Err = ErrTimeout
+	}
+	// release notifyChan to reduce memory footprint
+	// why asynchronously? to improve throughput, here is no need to block client request
+	go func() {
+		kv.mu.Lock()
+		kv.removeOutdatedNotifyChan(index)
+		kv.mu.Unlock()
+	}()
+
+}
+
+func (kv *KVServer) isDuplicateRequest(clientId int64, requestId int64) bool {
+	operationContext, ok := kv.lastOperations[clientId]
+	return ok && requestId <= operationContext.CommandId
 }
 
 func (kv *KVServer) Applier() {
-	for m := range kv.applyCh {
+	for !kv.killed() {
+		m := <-kv.applyCh
 		if m.CommandValid {
 			kv.mu.Lock()
+			if m.CommandIndex <= kv.lastApplied {
+				kv.mu.Unlock()
+				continue
+			}
+			kv.lastApplied = m.CommandIndex
+			command := m.Command.(Command)
+			var response *CommandResponse
 
-			op := m.Command.(Op)
-			// check whether op is exsit in visiter
-			// val, ok := kv.requests[op.Id]
-			// if ok {
-			// 	if !val {
-			val, ok := kv.requests[op.Id]
-			if !ok || !val {
-				kv.requests[op.Id] = true
-				kv.ApplyLog(op)
+			if command.Op != Op_Get && kv.isDuplicateRequest(command.ClientId, command.CommandId) {
+				response = kv.lastOperations[command.ClientId].Response
+			} else {
+				response = kv.applyLogToStateMachine(&command)
+				if command.Op != Op_Get {
+					DPrintf("{Node %v} update commandId %v,Response %v\n", kv.me, command.CommandId, response)
+					kv.lastOperations[command.ClientId] = OperationContext{command.CommandId, response}
+				}
 			}
 
-			// 	} else {
-			// 		DPrintf("%v get op:%v from applyCh but is alreadly exsit in requests list\n", kv.me, op)
-			// 	}
-			// } else {
-			// 	DPrintf("%v get op:%v from applyCh but is not exsit in requests list\n", kv.me, op)
-			// }
+			if currentTerm, isLeader := kv.rf.GetState(); isLeader && m.CommandTerm == currentTerm {
+				ch := kv.getNotifyChan(m.CommandIndex)
+				ch <- response
+			}
+
+			if kv.maxraftstate != -1 && kv.maxraftstate < kv.rf.GetRaftStateSize() {
+				kv.rf.Snapshot(m.CommandIndex, kv.readSnapshot())
+			}
+
+			kv.mu.Unlock()
+		} else if m.SnapshotValid {
+			kv.mu.Lock()
+			if kv.rf.CondInstallSnapshot(m.SnapshotTerm,
+				m.SnapshotIndex, m.Snapshot) {
+				kv.readPersist(m.Snapshot)
+				kv.lastApplied = m.SnapshotIndex
+			}
 			kv.mu.Unlock()
 		} else {
-			// ignore other types of ApplyMsg
+			panic(fmt.Sprintf("unexpected Message %v", m))
 		}
 	}
 }
 
-func (kv *KVServer) ApplyLog(op Op) {
-	if op.Flag == Op_PUT {
-		kv.data[op.Key] = op.Value
-	} else if op.Flag == Op_APPEND {
-		val, ok := kv.data[op.Key]
-		if ok {
-			kv.data[op.Key] = val + op.Value
-		} else {
-			kv.data[op.Key] = op.Value
-		}
-	} else if op.Flag == Op_GET {
-		// nothing to do
+func (kv *KVServer) getNotifyChan(index int) chan *CommandResponse {
+	if _, ok := kv.notifyChans[index]; !ok {
+		kv.notifyChans[index] = make(chan *CommandResponse, 1)
 	}
+	return kv.notifyChans[index]
 }
 
-//
-// the tester calls Kill() when a KVServer instance won't
-// be needed again. for your convenience, we supply
-// code to set rf.dead (without needing a lock),
-// and a killed() method to test rf.dead in
-// long-running loops. you can also add your own
-// code to Kill(). you're not required to do anything
-// about this, but it may be convenient (for example)
-// to suppress debug output from a Kill()ed instance.
-//
+func (kv *KVServer) removeOutdatedNotifyChan(index int) {
+	delete(kv.notifyChans, index)
+}
+
+func (kv *KVServer) applyLogToStateMachine(command *Command) *CommandResponse {
+	var val string
+	var err Err
+	switch command.Op {
+	case Op_Append:
+		err = kv.kvStateMachine.Append(command.Key, command.Value)
+	case Op_PUT:
+		err = kv.kvStateMachine.Put(command.Key, command.Value)
+	case Op_Get:
+		val, err = kv.kvStateMachine.Get(command.Key)
+	}
+	return &CommandResponse{Err: err, Value: val}
+}
+
 func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
@@ -216,24 +154,38 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-//
-// servers[] contains the ports of the set of
-// servers that will cooperate via Raft to
-// form the fault-tolerant key/value service.
-// me is the index of the current server in servers[].
-// the k/v server should store snapshots through the underlying Raft
-// implementation, which should call persister.SaveStateAndSnapshot() to
-// atomically save the Raft state along with the snapshot.
-// the k/v server should snapshot when Raft's saved state exceeds maxraftstate bytes,
-// in order to allow Raft to garbage-collect its log. if maxraftstate is -1,
-// you don't need to snapshot.
-// StartKVServer() must return quickly, so it should start goroutines
-// for any long-running work.
-//
+func (kv *KVServer) readSnapshot() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	e.Encode(kv.lastOperations)
+	e.Encode(kv.kvStateMachine)
+
+	return w.Bytes()
+}
+
+func (kv *KVServer) readPersist(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	// Your code here (2C).
+	// Example:
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var lastOperations map[int64]OperationContext
+	var kvStateMachine MemoryKV
+	if d.Decode(&lastOperations) != nil ||
+		d.Decode(&kvStateMachine) != nil {
+		DPrintf("{Node %v} restores snapshot failed", kv.me)
+	}
+	kv.lastOperations = lastOperations
+	kv.kvStateMachine = &kvStateMachine
+}
+
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+	labgob.Register(Command{})
 
 	kv := new(KVServer)
 	kv.me = me
@@ -245,10 +197,15 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
-	kv.data = make(map[string]string)
-	kv.requests = make(map[string]bool)
+	kv.kvStateMachine = NewMemoryKV()
+	kv.lastOperations = make(map[int64]OperationContext)
+	kv.notifyChans = make(map[int]chan *CommandResponse)
+
+	kv.readPersist(persister.ReadSnapshot())
 
 	go kv.Applier()
+
+	DPrintf("{Node %v} has started", kv.me)
 
 	return kv
 }

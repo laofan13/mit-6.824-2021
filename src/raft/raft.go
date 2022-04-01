@@ -53,6 +53,12 @@ func (rf *Raft) GetState() (int, bool) {
 	return rf.currentTerm, rf.state == Leader
 }
 
+func (rf *Raft) GetRaftStateSize() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.persister.RaftStateSize()
+}
+
 func (rf *Raft) encodeState() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -537,6 +543,7 @@ func (rf *Raft) applier() {
 				CommandValid: true,
 				CommandIndex: rf.lastApplied,
 				Command:      rf.log.entry(rf.lastApplied).Command,
+				CommandTerm:  rf.currentTerm,
 			}
 
 			DPrintf("%v: applier index: %v\n", rf.me, reply.CommandIndex)

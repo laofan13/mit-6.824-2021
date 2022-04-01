@@ -1,45 +1,92 @@
 package kvraft
 
-import "fmt"
-
-const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongLeader = "ErrWrongLeader"
+import (
+	"fmt"
+	"log"
+	"time"
 )
 
-type Err string
+const ExecuteTimeout = 500 * time.Millisecond
 
-// Put or Append
-type PutAppendArgs struct {
+const Debug = true
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+	return
+}
+
+type Operation int
+
+const (
+	Op_PUT Operation = iota
+	Op_Append
+	Op_Get
+)
+
+func (op Operation) String() string {
+	switch op {
+	case Op_PUT:
+		return "PUT"
+	case Op_Append:
+		return "APPEND"
+	case Op_Get:
+		return "GET"
+	}
+	panic("Not Found Operation")
+}
+
+type Err int
+
+const (
+	OK Err = iota
+	ErrNoKey
+	ErrWrongLeader
+	ErrTimeout
+)
+
+func (err Err) String() string {
+	switch err {
+	case OK:
+		return "OK"
+	case ErrNoKey:
+		return "ErrNoKey"
+	case ErrWrongLeader:
+		return "ErrWrongLeader"
+	case ErrTimeout:
+		return "Timeout"
+	}
+	panic("Not Found Err ")
+}
+
+type Command struct {
+	*CommandRequest
+}
+
+type CommandRequest struct {
 	Key   string
 	Value string
-	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
-	Id string
+	Op    Operation
+
+	ClientId  int64
+	CommandId int64
 }
 
-func (args *PutAppendArgs) String() string {
-	return fmt.Sprintf("Id: %v Key: %v Value: %v Op: %v", args.Id, args.Key, args.Value, args.Op)
+func (args *CommandRequest) String() string {
+	return fmt.Sprintf("clientId: %v,CommandId: %v, Key: %v, Value: %v, Op: %v", args.ClientId, args.CommandId, args.Key, args.Value, args.Op)
 }
 
-type PutAppendReply struct {
-	Err Err
-}
-
-type GetArgs struct {
-	Key string
-	// You'll have to add definitions here.
-	Id string
-}
-
-func (args *GetArgs) String() string {
-	return fmt.Sprintf("Id: %v Key: %v", args.Id, args.Key)
-}
-
-type GetReply struct {
+type CommandResponse struct {
 	Err   Err
 	Value string
+}
+
+func (args *CommandResponse) String() string {
+	return fmt.Sprintf("Value: %v,Err: %v\n", args.Value, args.Err)
+}
+
+type OperationContext struct {
+	CommandId int64
+	Response  *CommandResponse
 }
