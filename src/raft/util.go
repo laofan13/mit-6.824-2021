@@ -7,7 +7,7 @@ import (
 )
 
 // Debugging
-const Debug = false
+const Debug = true
 
 func init() {
 	logFile, err := os.OpenFile("log.txt", os.O_CREATE|os.O_WRONLY, 0666)

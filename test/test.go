@@ -1,10 +1,30 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 func main() {
-	slice := []int{1, 2, 3}
+	t := time.Now()
+	fmt.Printf("t = %v \n", t)
+	t = t.Add(time.Millisecond * 1000)
+	fmt.Printf("t + 1s = %v \n", t)
 
-	fmt.Printf("%v", slice[:3])
+	for {
+		now := time.Now()
+		fmt.Printf("now = %v \n", now)
+
+		if now.After(t) {
+			fmt.Printf("now after t \n")
+			break
+		} else {
+			fmt.Printf("now before t \n")
+		}
+
+		ms := time.Millisecond * 100
+		time.Sleep(ms)
+	}
+
 	return
 }
