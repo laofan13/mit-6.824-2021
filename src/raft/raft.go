@@ -235,6 +235,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesAags, reply *AppendEntriesReply
 
 	reply.Success = true
 	reply.Term = rf.currentTerm
+
 }
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
@@ -543,7 +544,7 @@ func (rf *Raft) applier() {
 			reply := ApplyMsg{
 				CommandValid: true,
 				CommandIndex: rf.lastApplied,
-				CommandTerm:  rf.currentTerm,
+				CommandTerm:  rf.log.entry(rf.lastApplied).Term,
 				Command:      rf.log.entry(rf.lastApplied).Command,
 			}
 
