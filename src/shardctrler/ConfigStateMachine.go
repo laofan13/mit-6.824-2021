@@ -1,5 +1,7 @@
 package shardctrler
 
+import "sort"
+
 type ConfigStateMachine interface {
 	Query(num int) (Config, Err)
 	Join(servers map[int][]string) Err
@@ -83,60 +85,18 @@ func (mc *MemoryConfig) reAsignShards(config *Config) {
 		return
 	}
 
-	mapGid2Shards := make(map[int][]int, len(config.Groups)) // gid -> shards[]
-	for k, _ := range config.Groups {
-		mapGid2Shards[k] = make([]int, 0)
-	}
-	// allow re-use of a GID---
-	avg := len(config.Shards) / len(config.Groups)
-
-	mapGid2Shards[0] = make([]int, 0)
-	for index, gid := range config.Shards {
-		if _, ok := mapGid2Shards[gid]; !ok { //if gid is not exist .indicate is already removed
-			config.Shards[index] = 0
-			gid = 0
+	groupLen := len(config.Groups)
+	gidList := make([]int, 0, groupLen)
+	if groupLen == 0 {
+		gidList = []int{0}
+	} else {
+		for key := range config.Groups {
+			gidList = append(gidList, key)
 		}
-		mapGid2Shards[gid] = append(mapGid2Shards[gid], index)
+		sort.Ints(gidList)
 	}
 
-	remaining := mapGid2Shards[0]
-	delete(mapGid2Shards, 0)
-
-	keys := make([]int, len(mapGid2Shards))
-	for gid, shards := range mapGid2Shards {
-		dist := len(shards) - avg
-		if dist > 0 {
-			remaining = append(remaining, shards[avg:]...)
-			mapGid2Shards[gid] = shards[:avg]
-		} else if dist < 0 {
-			if len(remaining) >= -dist {
-				mapGid2Shards[gid] = append(shards, remaining[:-dist]...)
-				remaining = remaining[-dist:]
-			} else {
-				mapGid2Shards[gid] = append(shards, remaining...)
-				remaining = remaining[len(remaining):]
-				keys = append(keys, gid)
-			}
-		}
+	for i, _ := range config.Shards {
+		config.Shards[i] = gidList[i%groupLen]
 	}
-
-	for _, gid := range keys {
-		if shards, ok := mapGid2Shards[gid]; ok {
-			dist := avg - len(shards)
-			if len(remaining) > dist {
-				mapGid2Shards[gid] = append(shards, remaining[:dist]...)
-				remaining = remaining[dist:]
-			} else {
-				mapGid2Shards[gid] = append(shards, remaining...)
-				break
-			}
-		}
-	}
-
-	for gid, shards := range mapGid2Shards {
-		for _, v := range shards {
-			config.Shards[v] = gid
-		}
-	}
-	DPrintf("latest config %v", config)
 }

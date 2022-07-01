@@ -280,6 +280,7 @@ func (sc *ShardCtrler) applyLogToStateMachine(opLog *OpLog) *GeneticReply {
 		config, err := sc.configStateMachine.Query(args.Num)
 		reply.Err = err
 		reply.Config = config
+		DPrintf("Node %v: Query Last Config %v", sc.me, reply.Config)
 	}
 
 	return &reply
