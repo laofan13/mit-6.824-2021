@@ -7,8 +7,6 @@ package shardctrler
 import (
 	"crypto/rand"
 	"math/big"
-	"sync"
-	"time"
 
 	"6.824/labrpc"
 )
@@ -16,7 +14,7 @@ import (
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// Your data here.
-	mu        sync.Mutex
+	leaderId  int
 	clientId  int64
 	commandId int64
 }
@@ -36,33 +34,25 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	return ck
 }
 
-func (ck *Clerk) getCommandId() int64 {
-	ck.mu.Lock()
-	defer ck.mu.Unlock()
-	ck.commandId++
-	return ck.commandId
-}
-
 func (ck *Clerk) Query(num int) Config {
 	args := &QueryArgs{}
 	// Your code here.
 	args.Num = num
-
 	//client Identify
 	args.ClientId = ck.clientId
-	args.CommandId = ck.getCommandId()
+	args.CommandId = ck.commandId
 
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
-			var reply GeneticReply
-			ok := srv.Call("ShardCtrler.Query", args, &reply)
-			if ok && reply.WrongLeader == false {
-				DPrintf("client reply a query request with reply %v", reply)
-				return reply.Config
-			}
+		var reply GeneticReply
+		ok := ck.servers[ck.leaderId].Call("ShardCtrler.Query", args, &reply)
+		if !ok || reply.Err == WrongLeader || reply.Err == TimeOut {
+			// DPrintf("client %v successfully %v {key: %v,value: %v}\n", ck.clientId, request.Op, request.Key, request.Value)
+			ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
+			continue
 		}
-		time.Sleep(100 * time.Millisecond)
+		ck.commandId++
+		return reply.Config
 	}
 }
 
@@ -72,18 +62,19 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	args.Servers = servers
 	//client Identify
 	args.ClientId = ck.clientId
-	args.CommandId = ck.getCommandId()
+	args.CommandId = ck.commandId
 
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
-			var reply GeneticReply
-			ok := srv.Call("ShardCtrler.Join", args, &reply)
-			if ok && reply.WrongLeader == false {
-				return
-			}
+		var reply GeneticReply
+		ok := ck.servers[ck.leaderId].Call("ShardCtrler.Join", args, &reply)
+		if !ok || reply.Err == WrongLeader || reply.Err == TimeOut {
+			// DPrintf("client %v successfully %v {key: %v,value: %v}\n", ck.clientId, request.Op, request.Key, request.Value)
+			ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
+			continue
 		}
-		time.Sleep(100 * time.Millisecond)
+		ck.commandId++
+		return
 	}
 }
 
@@ -93,18 +84,19 @@ func (ck *Clerk) Leave(gids []int) {
 	args.GIDs = gids
 	//client Identify
 	args.ClientId = ck.clientId
-	args.CommandId = ck.getCommandId()
+	args.CommandId = ck.commandId
 
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
-			var reply GeneticReply
-			ok := srv.Call("ShardCtrler.Leave", args, &reply)
-			if ok && reply.WrongLeader == false {
-				return
-			}
+		var reply GeneticReply
+		ok := ck.servers[ck.leaderId].Call("ShardCtrler.Leave", args, &reply)
+		if !ok || reply.Err == WrongLeader || reply.Err == TimeOut {
+			// DPrintf("client %v successfully %v {key: %v,value: %v}\n", ck.clientId, request.Op, request.Key, request.Value)
+			ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
+			continue
 		}
-		time.Sleep(100 * time.Millisecond)
+		ck.commandId++
+		return
 	}
 }
 
@@ -115,17 +107,18 @@ func (ck *Clerk) Move(shard int, gid int) {
 	args.GID = gid
 	//client Identify
 	args.ClientId = ck.clientId
-	args.CommandId = ck.getCommandId()
+	args.CommandId = ck.commandId
 
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
-			var reply GeneticReply
-			ok := srv.Call("ShardCtrler.Move", args, &reply)
-			if ok && reply.WrongLeader == false {
-				return
-			}
+		var reply GeneticReply
+		ok := ck.servers[ck.leaderId].Call("ShardCtrler.Move", args, &reply)
+		if !ok || reply.Err == WrongLeader || reply.Err == TimeOut {
+			// DPrintf("client %v successfully %v {key: %v,value: %v}\n", ck.clientId, request.Op, request.Key, request.Value)
+			ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
+			continue
 		}
-		time.Sleep(100 * time.Millisecond)
+		ck.commandId++
+		return
 	}
 }

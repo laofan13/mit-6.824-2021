@@ -31,7 +31,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-const ExecuteTimeout = 1000 * time.Millisecond
+const ExecuteTimeout = 500 * time.Millisecond
 
 // The number of shards.
 const NShards = 10
@@ -75,8 +75,7 @@ type JoinArgs struct {
 }
 
 type JoinReply struct {
-	WrongLeader bool
-	Err         Err
+	Err Err
 }
 
 type LeaveArgs struct {
@@ -85,8 +84,7 @@ type LeaveArgs struct {
 }
 
 type LeaveReply struct {
-	WrongLeader bool
-	Err         Err
+	Err Err
 }
 
 type MoveArgs struct {
@@ -96,8 +94,7 @@ type MoveArgs struct {
 }
 
 type MoveReply struct {
-	WrongLeader bool
-	Err         Err
+	Err Err
 }
 
 type QueryArgs struct {
@@ -106,15 +103,13 @@ type QueryArgs struct {
 }
 
 type QueryReply struct {
-	WrongLeader bool
-	Err         Err
-	Config      Config
+	Err    Err
+	Config Config
 }
 
 type GeneticReply struct {
-	WrongLeader bool
-	Err         Err
-	Config      Config
+	Err    Err
+	Config Config
 }
 
 type Op int

@@ -49,7 +49,6 @@ func (mc *MemoryConfig) Join(servers map[int][]string) Err {
 
 	mc.reAsignShards(&config)
 	mc.configs = append(mc.configs, config)
-	DPrintf("latest configs %v", mc.configs)
 
 	return OK
 }
@@ -62,7 +61,6 @@ func (mc *MemoryConfig) Leave(gids []int) Err {
 	// allow re-use of a GID
 	mc.reAsignShards(&config)
 	mc.configs = append(mc.configs, config)
-	DPrintf("latest configs %v", mc.configs)
 	return OK
 }
 
@@ -72,7 +70,6 @@ func (mc *MemoryConfig) Move(shard int, gid int) Err {
 
 	mc.configs = append(mc.configs, config)
 
-	DPrintf("latest configs %v", mc.configs)
 	return OK
 }
 

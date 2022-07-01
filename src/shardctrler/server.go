@@ -33,7 +33,7 @@ func (sc *ShardCtrler) Join(args *JoinArgs, reply *GeneticReply) {
 	sc.mu.Lock()
 	if sc.isDuplicateRequest(args.ClientId, args.CommandId) {
 		lastReply := sc.lastOperations[args.ClientId].lastReply
-		reply.WrongLeader, reply.Err = lastReply.WrongLeader, lastReply.Err
+		reply.Err = lastReply.Err
 		sc.mu.Unlock()
 		return
 	}
@@ -46,7 +46,6 @@ func (sc *ShardCtrler) Join(args *JoinArgs, reply *GeneticReply) {
 
 	index, _, isLeader := sc.rf.Start(opLog)
 	if !isLeader {
-		reply.WrongLeader = true
 		reply.Err = WrongLeader
 		return
 	}
@@ -57,9 +56,8 @@ func (sc *ShardCtrler) Join(args *JoinArgs, reply *GeneticReply) {
 
 	select {
 	case result := <-ch:
-		reply.WrongLeader, reply.Err = result.WrongLeader, result.Err
+		reply.Err = result.Err
 	case <-time.After(ExecuteTimeout):
-		reply.WrongLeader = true
 		reply.Err = TimeOut
 	}
 
@@ -82,7 +80,7 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 	sc.mu.Lock()
 	if sc.isDuplicateRequest(args.ClientId, args.CommandId) {
 		lastReply := sc.lastOperations[args.ClientId].lastReply
-		reply.WrongLeader, reply.Err = lastReply.WrongLeader, lastReply.Err
+		reply.Err = lastReply.Err
 		sc.mu.Unlock()
 		return
 	}
@@ -95,7 +93,6 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 
 	index, _, isLeader := sc.rf.Start(opLog)
 	if !isLeader {
-		reply.WrongLeader = true
 		reply.Err = WrongLeader
 		return
 	}
@@ -106,9 +103,8 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 
 	select {
 	case result := <-ch:
-		reply.WrongLeader, reply.Err = result.WrongLeader, result.Err
+		reply.Err = result.Err
 	case <-time.After(ExecuteTimeout):
-		reply.WrongLeader = true
 		reply.Err = TimeOut
 	}
 
@@ -130,7 +126,7 @@ func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 	sc.mu.Lock()
 	if sc.isDuplicateRequest(args.ClientId, args.CommandId) {
 		lastReply := sc.lastOperations[args.ClientId].lastReply
-		reply.WrongLeader, reply.Err = lastReply.WrongLeader, lastReply.Err
+		reply.Err = lastReply.Err
 		sc.mu.Unlock()
 		return
 	}
@@ -143,7 +139,6 @@ func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 
 	index, _, isLeader := sc.rf.Start(opLog)
 	if !isLeader {
-		reply.WrongLeader = true
 		reply.Err = WrongLeader
 		return
 	}
@@ -154,9 +149,8 @@ func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 
 	select {
 	case result := <-ch:
-		reply.WrongLeader, reply.Err = result.WrongLeader, result.Err
+		reply.Err = result.Err
 	case <-time.After(ExecuteTimeout):
-		reply.WrongLeader = true
 		reply.Err = TimeOut
 	}
 
@@ -182,7 +176,6 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 
 	index, _, isLeader := sc.rf.Start(opLog)
 	if !isLeader {
-		reply.WrongLeader = true
 		reply.Err = WrongLeader
 		return
 	}
@@ -193,11 +186,9 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 
 	select {
 	case result := <-ch:
-		reply.WrongLeader = result.WrongLeader
 		reply.Err = result.Err
 		reply.Config = result.Config
 	case <-time.After(ExecuteTimeout):
-		reply.WrongLeader = true
 		reply.Err = TimeOut
 	}
 
@@ -256,7 +247,6 @@ func (sc *ShardCtrler) Applier() {
 			DPrintf("Node %v: received a ApplyMsg with commandId %v and CommandIndex %v", sc.me, argsId.CommandId, m.CommandIndex)
 
 			if currentTerm, isLeader := sc.rf.GetState(); isLeader && m.CommandTerm == currentTerm {
-				reply.WrongLeader = false
 				ch := sc.getNotifyChan(m.CommandIndex)
 				ch <- reply
 			}
